@@ -103,9 +103,12 @@ function buildRawgQuery(filters, page) {
   if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
   if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
   if (filters.dates)            params.set('dates',     filters.dates);
-  // When searching, omit ordering so RAWG ranks by relevance instead of date
+  // When searching, omit ordering so RAWG ranks by relevance
   if (filters.ordering && !hasSearch) params.set('ordering', filters.ordering);
-  if (hasSearch) params.set('search', filters.search.trim());
+  if (hasSearch) {
+    params.set('search',         filters.search.trim());
+    params.set('search_precise', 'true');
+  }
   return params.toString();
 }
 
@@ -409,12 +412,13 @@ export default function App() {
       .catch(function() { setScreen('auth'); });
   }, []);
 
-  // Refetch when filters change
+  // Refetch when filters change — debounce search input, instant for other filter changes
   useEffect(function() {
     if (screen !== 'games' || !currentGuild) return;
     localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
     clearTimeout(fetchTimeout.current);
-    fetchTimeout.current = setTimeout(function() { fetchGames(filters, 1); }, 300);
+    var delay = (filters.search !== undefined && filters.search.length > 0) ? 600 : 0;
+    fetchTimeout.current = setTimeout(function() { fetchGames(filters, 1); }, delay);
   }, [filters, screen]);
 
   async function loadGuilds() {
