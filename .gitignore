@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Environment variables — NEVER commit these
+.env
+*.env.local
+.env.production
+secrets.json
+
+# Build output
+frontend/dist/
+backend/public/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
