@@ -1,8 +1,84 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
-const API_URL       = import.meta.env.VITE_API_URL ?? '';
-const GUILD_KEY     = 'dc_guild'; // same key as calendar.42p.uk
-const CALENDAR_URL  = 'https://calendar.42p.uk';
+const API_URL      = import.meta.env.VITE_API_URL ?? '';
+const GUILD_KEY    = 'dc_guild';
+const FILTERS_KEY  = 'dc_game_filters';
+const CALENDAR_URL = 'https://calendar.42p.uk';
+
+// ─── RAWG reference data ──────────────────────────────────────
+
+const GENRES = [
+  { id: 4,   name: 'Action' },
+  { id: 3,   name: 'Adventure' },
+  { id: 5,   name: 'RPG' },
+  { id: 2,   name: 'Shooter' },
+  { id: 10,  name: 'Strategy' },
+  { id: 7,   name: 'Puzzle' },
+  { id: 1,   name: 'Racing' },
+  { id: 15,  name: 'Sports' },
+  { id: 6,   name: 'Fighting' },
+  { id: 14,  name: 'Simulation' },
+  { id: 83,  name: 'Platformer' },
+  { id: 11,  name: 'Arcade' },
+  { id: 40,  name: 'Casual' },
+  { id: 51,  name: 'Indie' },
+  { id: 59,  name: 'MMO' },
+];
+
+const TAGS = [
+  { id: 7,    name: 'Multiplayer' },
+  { id: 31,   name: 'Singleplayer' },
+  { id: 8,    name: 'Online' },
+  { id: 799,  name: 'Survival' },
+  { id: 13,   name: 'Atmospheric' },
+  { id: 42,   name: 'Open World' },
+  { id: 24,   name: 'Story Rich' },
+  { id: 4,    name: 'Horror' },
+  { id: 198,  name: 'Co-op' },
+  { id: 397,  name: 'Roguelike' },
+  { id: 121,  name: 'Sandbox' },
+  { id: 149,  name: 'First-Person' },
+  { id: 4026, name: 'Third Person' },
+  { id: 693,  name: 'Stealth' },
+  { id: 75,   name: '2D' },
+  { id: 79,   name: '3D' },
+];
+
+const PLATFORMS = [
+  { id: 4,   name: 'PC' },
+  { id: 187, name: 'PS5' },
+  { id: 18,  name: 'PS4' },
+  { id: 186, name: 'Xbox Series X' },
+  { id: 1,   name: 'Xbox One' },
+  { id: 7,   name: 'Switch' },
+  { id: 3,   name: 'iOS' },
+  { id: 21,  name: 'Android' },
+];
+
+const DATE_PRESETS = [
+  { value: '',                                                                      label: 'All time' },
+  { value: new Date().toISOString().slice(0,10) + ',2030-12-31',                  label: 'Upcoming' },
+  { value: new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10), label: 'This year' },
+  { value: new Date(Date.now()-90*24*60*60*1000).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10),  label: 'Last 3 months' },
+];
+
+const ORDERINGS = [
+  { value: '-released',      label: 'Release date (newest)' },
+  { value: 'released',       label: 'Release date (oldest)' },
+  { value: '-rating',        label: 'Rating' },
+  { value: '-added',         label: 'Popularity' },
+  { value: 'name',           label: 'Name A–Z' },
+  { value: '-metacritic',    label: 'Metacritic' },
+];
+
+const DEFAULT_FILTERS = {
+  genres:    [],
+  tags:      [],
+  platforms: [],
+  dates:     '',
+  ordering:  '-released',
+  search:    '',
+};
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -11,18 +87,28 @@ async function apiFetch(method, path, body, guildId) {
   if (body)    headers['Content-Type'] = 'application/json';
   if (guildId) headers['X-Guild-ID']   = guildId;
   var res = await fetch(API_URL + path, {
-    method:      method,
-    credentials: 'include',
-    headers:     headers,
-    body:        body ? JSON.stringify(body) : undefined,
+    method: method, credentials: 'include', headers: headers,
+    body:   body ? JSON.stringify(body) : undefined,
   });
   var data = await res.json().catch(function() { return {}; });
   if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
   return data;
 }
 
-function newId() {
-  return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+function buildRawgQuery(filters, page) {
+  var params = new URLSearchParams();
+  params.set('page', page || 1);
+  if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
+  if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
+  if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
+  if (filters.dates)            params.set('dates',     filters.dates);
+  if (filters.ordering)         params.set('ordering',  filters.ordering);
+  if (filters.search && filters.search.trim().length >= 2) params.set('search', filters.search.trim());
+  return params.toString();
+}
+
+function toggleItem(arr, id) {
+  return arr.includes(id) ? arr.filter(function(x) { return x !== id; }) : arr.concat(id);
 }
 
 // ─── 42p Logo ────────────────────────────────────────────────
@@ -51,36 +137,115 @@ function Logo42p({ size }) {
   );
 }
 
+// ─── Multi-select chip group ──────────────────────────────────
+function ChipGroup({ items, selected, onToggle }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+      {items.map(function(item) {
+        var active = selected.includes(item.id);
+        return (
+          <button key={item.id} onClick={function() { onToggle(item.id); }}
+            style={{ padding: '4px 10px', borderRadius: 20, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 11, fontWeight: active ? 600 : 400, cursor: 'pointer', transition: 'all 0.12s' }}>
+            {item.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Filter panel ─────────────────────────────────────────────
+function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
+  var hasFilters = filters.genres.length > 0 || filters.tags.length > 0 ||
+    filters.platforms.length > 0 || filters.dates !== '' ||
+    filters.ordering !== '-released';
+
+  return (
+    <aside style={{ width: 220, flexShrink: 0, background: '#111116', borderRight: '0.5px solid #2a2b36', overflowY: 'auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 18 }} className="scroll-thin">
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#e8e9f3' }}>Filters</p>
+        {hasFilters && (
+          <button onClick={onReset} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 11, padding: 0 }}>Reset all</button>
+        )}
+      </div>
+
+      {/* Result count */}
+      <p style={{ margin: 0, fontSize: 11, color: '#6b6b7a' }}>
+        {loading ? 'Loading…' : resultCount.toLocaleString() + ' games'}
+      </p>
+
+      {/* Release window */}
+      <div>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Release window</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {DATE_PRESETS.map(function(p) {
+            var active = filters.dates === p.value;
+            return (
+              <button key={p.value} onClick={function() { onChange({ dates: p.value }); }}
+                style={{ padding: '6px 10px', borderRadius: 7, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f122' : 'transparent', color: active ? '#a5b4fc' : '#8b8ca8', fontSize: 12, fontWeight: active ? 600 : 400, cursor: 'pointer', textAlign: 'left', transition: 'all 0.12s' }}>
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Sort */}
+      <div>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Sort by</p>
+        <select value={filters.ordering} onChange={function(e) { onChange({ ordering: e.target.value }); }}
+          style={{ width: '100%', background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 8, color: '#e8e9f3', padding: '7px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
+          {ORDERINGS.map(function(o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
+        </select>
+      </div>
+
+      {/* Genres */}
+      <div>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Genres {filters.genres.length > 0 && <span style={{ color: '#6366f1' }}>({filters.genres.length})</span>}
+        </p>
+        <ChipGroup items={GENRES} selected={filters.genres} onToggle={function(id) { onChange({ genres: toggleItem(filters.genres, id) }); }} />
+      </div>
+
+      {/* Tags */}
+      <div>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Tags {filters.tags.length > 0 && <span style={{ color: '#6366f1' }}>({filters.tags.length})</span>}
+        </p>
+        <ChipGroup items={TAGS} selected={filters.tags} onToggle={function(id) { onChange({ tags: toggleItem(filters.tags, id) }); }} />
+      </div>
+
+      {/* Platforms */}
+      <div>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Platforms {filters.platforms.length > 0 && <span style={{ color: '#6366f1' }}>({filters.platforms.length})</span>}
+        </p>
+        <ChipGroup items={PLATFORMS} selected={filters.platforms} onToggle={function(id) { onChange({ platforms: toggleItem(filters.platforms, id) }); }} />
+      </div>
+
+    </aside>
+  );
+}
+
 // ─── Auth screen ──────────────────────────────────────────────
 function AuthScreen() {
-  var [busy, setBusy] = useState(false);
+  var [busy,  setBusy]  = useState(false);
   var [error, setError] = useState('');
-
   useEffect(function() {
     var params = new URLSearchParams(window.location.search);
-    if (params.get('auth_error')) {
-      window.history.replaceState({}, '', window.location.pathname);
-      setError('Discord sign-in failed. Please try again.');
-    }
+    if (params.get('auth_error')) { window.history.replaceState({}, '', window.location.pathname); setError('Discord sign-in failed. Please try again.'); }
   }, []);
-
   return (
     <div style={{ minHeight: '100vh', background: 'radial-gradient(ellipse at 60% 20%, #2e1065 0%, #0f1015 60%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
       <div style={{ width: '100%', maxWidth: 400, textAlign: 'center' }}>
         <div style={{ display: 'inline-block', marginBottom: 20 }}><Logo42p size={64} /></div>
         <h1 style={{ fontSize: 26, fontWeight: 900, color: '#f5f3ff', margin: '0 0 6px', letterSpacing: '-0.03em' }}>42p Games</h1>
-        <p style={{ fontSize: 13, color: '#a78bfa', margin: '0 0 32px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-          Upcoming Releases
-        </p>
-        <div style={{ background: 'rgba(26,27,34,0.85)', border: '0.5px solid #3b1f6e', borderRadius: 20, padding: '2rem', boxShadow: '0 24px 64px rgba(124,58,237,0.2)', backdropFilter: 'blur(12px)' }}>
-          <p style={{ fontSize: 13, color: '#8b8ca8', margin: '0 0 20px' }}>
-            Sign in with Discord to browse upcoming games and add them to your server's calendar.
-          </p>
-          <button
-            onClick={function() { setBusy(true); window.location.href = API_URL + '/auth/discord'; }}
-            disabled={busy}
-            style={{ width: '100%', padding: '13px', borderRadius: 12, border: 'none', background: busy ? '#3a3d8a' : 'linear-gradient(135deg,#5865f2,#7c3aed)', color: '#fff', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, cursor: busy ? 'not-allowed' : 'pointer', boxShadow: '0 4px 20px rgba(88,101,242,0.4)' }}
-          >
+        <p style={{ fontSize: 13, color: '#a78bfa', margin: '0 0 32px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Game Discovery</p>
+        <div style={{ background: 'rgba(26,27,34,0.85)', border: '0.5px solid #3b1f6e', borderRadius: 20, padding: '2rem', backdropFilter: 'blur(12px)', boxShadow: '0 24px 64px rgba(124,58,237,0.2)' }}>
+          <p style={{ fontSize: 13, color: '#8b8ca8', margin: '0 0 20px' }}>Sign in with Discord to browse games and add them to your server's calendar.</p>
+          <button onClick={function() { setBusy(true); window.location.href = API_URL + '/auth/discord'; }} disabled={busy}
+            style={{ width: '100%', padding: '13px', borderRadius: 12, border: 'none', background: busy ? '#3a3d8a' : 'linear-gradient(135deg,#5865f2,#7c3aed)', color: '#fff', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, cursor: busy ? 'not-allowed' : 'pointer' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
             {busy ? 'Connecting…' : 'Continue with Discord'}
           </button>
@@ -95,14 +260,12 @@ function AuthScreen() {
 
 // ─── Guild picker ─────────────────────────────────────────────
 function GuildPicker({ guilds, loading, error, onSelect }) {
-  if (loading) {
-    return (
-      <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#8b8ca8' }}>
-        <i className="ti ti-loader" style={{ fontSize: 20, color: '#6366f1', animation: 'spin 1s linear infinite' }} />
-        Loading your servers…
-      </div>
-    );
-  }
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#8b8ca8' }}>
+      <i className="ti ti-loader" style={{ fontSize: 20, color: '#6366f1', animation: 'spin 1s linear infinite' }} />
+      <style>{`@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}`}</style>
+    </div>
+  );
   return (
     <div style={{ minHeight: '100vh', background: 'radial-gradient(ellipse at 60% 20%, #2e1065 0%, #0f1015 60%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
       <div style={{ width: '100%', maxWidth: 500 }}>
@@ -118,15 +281,11 @@ function GuildPicker({ guilds, loading, error, onSelect }) {
               <button key={g.id} onClick={function() { onSelect(g); }}
                 style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 14, border: '0.5px solid #2a2b36', background: '#1a1b22', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s' }}
                 onMouseEnter={function(e) { e.currentTarget.style.background = '#22232c'; e.currentTarget.style.borderColor = '#6366f1'; }}
-                onMouseLeave={function(e) { e.currentTarget.style.background = '#1a1b22'; e.currentTarget.style.borderColor = '#2a2b36'; }}
-              >
+                onMouseLeave={function(e) { e.currentTarget.style.background = '#1a1b22'; e.currentTarget.style.borderColor = '#2a2b36'; }}>
                 {g.iconUrl
                   ? <img src={g.iconUrl} alt={g.name} style={{ width: 46, height: 46, borderRadius: 14, objectFit: 'cover', flexShrink: 0 }} />
-                  : <div style={{ width: 46, height: 46, borderRadius: 14, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#fff', flexShrink: 0 }}>{g.name[0].toUpperCase()}</div>
-                }
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: '#e8e9f3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</p>
-                </div>
+                  : <div style={{ width: 46, height: 46, borderRadius: 14, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#fff', flexShrink: 0 }}>{g.name[0].toUpperCase()}</div>}
+                <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: '#e8e9f3', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</p>
                 <i className="ti ti-chevron-right" style={{ fontSize: 16, color: '#52536a' }} />
               </button>
             );
@@ -143,24 +302,31 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
   var today       = new Date();
   var releaseDate = game.releaseDate ? new Date(game.releaseDate) : null;
   var daysUntil   = releaseDate ? Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24)) : null;
+  var [hoverRemove, setHoverRemove] = useState(false);
 
   return (
-    <div style={{ background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s', animation: 'fadeIn 0.3s ease' }}
+    <div style={{ background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s, border-color 0.15s', animation: 'fadeIn 0.3s ease' }}
       onMouseEnter={function(e) { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.borderColor = '#363748'; }}
-      onMouseLeave={function(e) { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#2a2b36'; }}
-    >
+      onMouseLeave={function(e) { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#2a2b36'; }}>
+
       {/* Cover */}
       <div style={{ position: 'relative', paddingTop: '56.25%', background: '#111116', overflow: 'hidden' }}>
         {game.coverUrl
           ? <img src={game.coverUrl} alt={game.name} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-          : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, background: 'linear-gradient(135deg,#1e1f28,#2a1f4e)' }}>🎮</div>
-        }
+          : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, background: 'linear-gradient(135deg,#1e1f28,#2a1f4e)' }}>🎮</div>}
+
         {daysUntil !== null && (
-          <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1', boxShadow: '0 2px 8px rgba(0,0,0,0.4)' }}>
+          <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
             {daysUntil <= 0 ? 'OUT NOW' : daysUntil === 1 ? 'TOMORROW' : daysUntil + 'd'}
           </div>
         )}
-        {/* RAWG link */}
+
+        {game.rating > 0 && (
+          <div style={{ position: 'absolute', top: 8, left: 8, borderRadius: 6, padding: '3px 7px', fontSize: 10, fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', gap: 3 }}>
+            ★ {game.rating.toFixed(1)}
+          </div>
+        )}
+
         <a href={'https://rawg.io/games/' + game.slug} target="_blank" rel="noopener noreferrer"
           title="View on RAWG" onClick={function(e) { e.stopPropagation(); }}
           style={{ position: 'absolute', bottom: 8, right: 8, width: 26, height: 26, borderRadius: 6, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, textDecoration: 'none' }}>
@@ -171,27 +337,26 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
       {/* Info */}
       <div style={{ padding: '12px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
         <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#e8e9f3', lineHeight: 1.3 }}>{game.name}</p>
-        <p style={{ margin: 0, fontSize: 12, color: game.releaseDate ? '#a78bfa' : '#6b6b7a', fontWeight: game.releaseDate ? 600 : 400 }}>
-          {releaseDate ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Release date TBC'}
+        <p style={{ margin: 0, fontSize: 12, color: releaseDate ? '#a78bfa' : '#6b6b7a', fontWeight: releaseDate ? 600 : 400 }}>
+          {releaseDate ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : 'TBC'}
         </p>
-        {game.platforms && (
-          <p style={{ margin: 0, fontSize: 11, color: '#4a4a5a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{game.platforms}</p>
-        )}
+        {game.genres && <p style={{ margin: 0, fontSize: 11, color: '#52536a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{game.genres}</p>}
+        {game.platforms && <p style={{ margin: 0, fontSize: 10, color: '#3a3a52', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{game.platforms}</p>}
       </div>
 
       {/* Action */}
       <div style={{ padding: '0 14px 12px' }}>
         {isAdded ? (
-          <button onClick={function() { onRemove(game); }}
-            style={{ width: '100%', padding: '7px', borderRadius: 8, border: '0.5px solid #16a34a55', background: '#16a34a15', color: '#86efac', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, transition: 'all 0.15s' }}
-            onMouseEnter={function(e) { e.currentTarget.style.background = '#ff000015'; e.currentTarget.style.borderColor = '#ff555544'; e.currentTarget.style.color = '#ff7070'; e.currentTarget.textContent = '✕ Remove from calendar'; }}
-            onMouseLeave={function(e) { e.currentTarget.style.background = '#16a34a15'; e.currentTarget.style.borderColor = '#16a34a55'; e.currentTarget.style.color = '#86efac'; e.currentTarget.innerHTML = '<span>✓ Added to calendar</span>'; }}
-          >
-            <span>✓ Added to calendar</span>
+          <button
+            onClick={function() { onRemove(game); }}
+            onMouseEnter={function() { setHoverRemove(true); }}
+            onMouseLeave={function() { setHoverRemove(false); }}
+            style={{ width: '100%', padding: '7px', borderRadius: 8, border: hoverRemove ? '0.5px solid #ff555544' : '0.5px solid #16a34a55', background: hoverRemove ? '#ff000015' : '#16a34a15', color: hoverRemove ? '#ff7070' : '#86efac', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, transition: 'all 0.15s' }}>
+            {hoverRemove ? <><i className="ti ti-x" style={{ fontSize: 12 }} />Remove</> : <><i className="ti ti-check" style={{ fontSize: 12 }} />Added to calendar</>}
           </button>
         ) : (
           <button onClick={function() { onAdd(game); }} disabled={isAdding}
-            style={{ width: '100%', padding: '7px', borderRadius: 8, border: 'none', background: isAdding ? '#3730a3' : '#6366f1', color: '#fff', cursor: isAdding ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+            style={{ width: '100%', padding: '7px', borderRadius: 8, border: 'none', background: isAdding ? '#3730a3' : '#6366f1', color: '#fff', cursor: isAdding ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, transition: 'background 0.15s' }}>
             {isAdding
               ? <><i className="ti ti-loader" style={{ fontSize: 12, animation: 'spin 1s linear infinite' }} />Adding…</>
               : <><i className="ti ti-calendar-plus" style={{ fontSize: 12 }} />Add to calendar</>}
@@ -204,225 +369,179 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
 
 // ─── Main App ─────────────────────────────────────────────────
 export default function App() {
-  var [screen,      setScreen]      = useState('loading'); // loading|auth|guild-pick|games
-  var [user,        setUser]        = useState(null);
-  var [guilds,      setGuilds]      = useState([]);
-  var [guildsLoading,setGuildsLoading] = useState(false);
-  var [guildsError, setGuildsError] = useState('');
-  var [currentGuild,setCurrentGuild]= useState(null);
+  var [screen,        setScreen]        = useState('loading');
+  var [user,          setUser]          = useState(null);
+  var [guilds,        setGuilds]        = useState([]);
+  var [guildsLoading, setGuildsLoading] = useState(false);
+  var [guildsError,   setGuildsError]   = useState('');
+  var [currentGuild,  setCurrentGuild]  = useState(null);
 
-  var [rawgGames,   setRawgGames]   = useState([]);
-  var [trackedGames,setTrackedGames]= useState([]); // games already added to this guild
-  var [gamesLoading,setGamesLoading]= useState(false);
-  var [addingId,    setAddingId]    = useState(null);
-  var [removingId,  setRemovingId]  = useState(null);
-  var [page,        setPage]        = useState(1);
-  var [hasMore,     setHasMore]     = useState(false);
-  var [filter,      setFilter]      = useState('upcoming'); // upcoming|all
-  var [searchQuery, setSearchQuery] = useState('');
-  var [searchResults,setSearchResults] = useState([]);
-  var [searching,   setSearching]   = useState(false);
-  var searchTimeout                 = useRef(null);
+  var [games,         setGames]         = useState([]);
+  var [trackedGames,  setTrackedGames]  = useState([]);
+  var [gamesLoading,  setGamesLoading]  = useState(false);
+  var [totalCount,    setTotalCount]    = useState(0);
+  var [hasMore,       setHasMore]       = useState(false);
+  var [page,          setPage]          = useState(1);
+  var [addingId,      setAddingId]      = useState(null);
 
-  // Bootstrap — check session
+  var [filters, setFilters] = useState(function() {
+    try { return Object.assign({}, DEFAULT_FILTERS, JSON.parse(localStorage.getItem(FILTERS_KEY))); }
+    catch (e) { return DEFAULT_FILTERS; }
+  });
+
+  var [mobileFilters, setMobileFilters] = useState(false);
+  var fetchTimeout = useRef(null);
+
+  // Bootstrap
   useEffect(function() {
     var params = new URLSearchParams(window.location.search);
-    if (params.get('auth') === 'success') {
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-
+    if (params.get('auth') === 'success') window.history.replaceState({}, '', window.location.pathname);
     apiFetch('GET', '/auth/me')
       .then(function(u) {
         setUser(u);
-        // Try to load guild from shared localStorage key
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(GUILD_KEY)); } catch (e) {}
-        if (saved) {
-          loadGamesForGuild(saved, u);
-        } else {
-          loadGuilds();
-        }
+        if (saved) { loadGamesForGuild(saved); }
+        else { loadGuilds(); }
       })
       .catch(function() { setScreen('auth'); });
   }, []);
 
+  // Refetch when filters change
+  useEffect(function() {
+    if (screen !== 'games' || !currentGuild) return;
+    localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
+    clearTimeout(fetchTimeout.current);
+    fetchTimeout.current = setTimeout(function() { fetchGames(filters, 1); }, 300);
+  }, [filters, screen]);
+
   async function loadGuilds() {
-    setGuildsLoading(true);
-    setGuildsError('');
-    setScreen('guild-pick');
-    try {
-      var g = await apiFetch('GET', '/api/guilds');
-      setGuilds(g);
-    } catch (err) {
-      setGuildsError(err.message);
-    } finally {
-      setGuildsLoading(false);
-    }
+    setGuildsLoading(true); setGuildsError(''); setScreen('guild-pick');
+    try { var g = await apiFetch('GET', '/api/guilds'); setGuilds(g); }
+    catch (err) { setGuildsError(err.message); }
+    finally { setGuildsLoading(false); }
   }
 
-  async function loadGamesForGuild(guild, u) {
+  async function loadGamesForGuild(guild) {
     setCurrentGuild(guild);
     localStorage.setItem(GUILD_KEY, JSON.stringify(guild));
     setScreen('games');
     setGamesLoading(true);
-
-    // Load already-tracked games for this guild
     try {
       var tracked = await apiFetch('GET', '/api/games', null, guild.id);
       setTrackedGames(tracked);
-    } catch (err) {
-      console.error('Failed to load tracked games:', err.message);
-    }
-
-    // Load upcoming survival multiplayer games from RAWG via Worker
-    await loadRawgPage(1, guild.id);
+    } catch (err) { console.error('Failed to load tracked games:', err.message); }
+    await fetchGames(filters, 1, guild.id);
     setGamesLoading(false);
   }
 
-  async function loadRawgPage(p, guildId) {
+  async function fetchGames(f, p, guildId) {
+    var gId = guildId || (currentGuild && currentGuild.id);
+    setGamesLoading(true);
     try {
-      var gId  = guildId || (currentGuild && currentGuild.id);
-      var data = await apiFetch('GET', '/api/rawg/upcoming?page=' + p, null, gId);
-      if (p === 1) {
-        setRawgGames(data.results || []);
-      } else {
-        setRawgGames(function(prev) { return prev.concat(data.results || []); });
-      }
+      var qs   = buildRawgQuery(f, p);
+      var data = await apiFetch('GET', '/api/rawg/games?' + qs, null, gId);
+      if (p === 1) { setGames(data.results || []); }
+      else { setGames(function(prev) { return prev.concat(data.results || []); }); }
+      setTotalCount(data.count || 0);
       setHasMore(!!data.next);
       setPage(p);
-    } catch (err) {
-      console.error('Failed to load RAWG games:', err.message);
-    }
+    } catch (err) { console.error('Fetch games failed:', err.message); }
+    finally { setGamesLoading(false); }
+  }
+
+  function updateFilters(patch) {
+    setFilters(function(prev) { return Object.assign({}, prev, patch); });
+  }
+
+  function resetFilters() {
+    setFilters(DEFAULT_FILTERS);
+    localStorage.removeItem(FILTERS_KEY);
   }
 
   function handleGuildSelect(guild) {
-    setRawgGames([]);
-    setTrackedGames([]);
-    setSearchResults([]);
-    setSearchQuery('');
-    loadGamesForGuild(guild, user);
+    setGames([]); setTrackedGames([]);
+    loadGamesForGuild(guild);
   }
 
   async function handleAdd(game) {
     setAddingId(game.rawgId);
     try {
       var saved = await apiFetch('POST', '/api/games', {
-        rawgId:      game.rawgId,
-        name:        game.name,
-        releaseDate: game.releaseDate,
-        coverUrl:    game.coverUrl,
-        platforms:   game.platforms,
+        rawgId: game.rawgId, name: game.name, releaseDate: game.releaseDate,
+        coverUrl: game.coverUrl, platforms: game.platforms,
       }, currentGuild.id);
       setTrackedGames(function(prev) { return prev.concat(saved); });
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setAddingId(null);
-    }
+    } catch (err) { alert(err.message); }
+    finally { setAddingId(null); }
   }
 
   async function handleRemove(game) {
-    // Find the tracked entry by rawgId
     var tracked = trackedGames.find(function(g) { return g.rawgId === game.rawgId; });
     if (!tracked) return;
-    setRemovingId(game.rawgId);
     try {
       await apiFetch('DELETE', '/api/games/' + tracked.id, null, currentGuild.id);
       setTrackedGames(function(prev) { return prev.filter(function(g) { return g.id !== tracked.id; }); });
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setRemovingId(null);
-    }
+    } catch (err) { alert(err.message); }
   }
 
-  function isTracked(rawgId) {
-    return trackedGames.some(function(g) { return g.rawgId === rawgId; });
-  }
-
-  // Search
-  function handleSearchInput(e) {
-    var q = e.target.value;
-    setSearchQuery(q);
-    clearTimeout(searchTimeout.current);
-    if (q.trim().length < 2) { setSearchResults([]); return; }
-    searchTimeout.current = setTimeout(async function() {
-      setSearching(true);
-      try {
-        var res = await apiFetch('GET', '/api/games/search?q=' + encodeURIComponent(q.trim()), null, currentGuild.id);
-        setSearchResults(res.map(function(g) { return Object.assign({}, g, { slug: g.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') }); }));
-      } catch (err) {
-        console.error('Search failed:', err.message);
-      } finally {
-        setSearching(false);
-      }
-    }, 500);
-  }
-
-  var today       = new Date();
-  var displayGames = (searchQuery.trim().length >= 2 ? searchResults : rawgGames).map(function(g) {
-    return Object.assign({}, g, { slug: g.slug || g.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') });
-  });
-
-  if (filter === 'upcoming' && !searchQuery) {
-    displayGames = displayGames.filter(function(g) { return g.releaseDate && new Date(g.releaseDate) > today; });
-  }
+  function isTracked(rawgId) { return trackedGames.some(function(g) { return g.rawgId === rawgId; }); }
 
   // ── Screens ───────────────────────────────────────────────
-
-  if (screen === 'loading') {
-    return (
-      <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#8b8ca8' }}>
-        <i className="ti ti-loader" style={{ fontSize: 20, color: '#6366f1', animation: 'spin 1s linear infinite' }} />
-        <style>{`@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}`}</style>
-      </div>
-    );
-  }
-
+  if (screen === 'loading') return (
+    <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#8b8ca8' }}>
+      <i className="ti ti-loader" style={{ fontSize: 20, color: '#6366f1', animation: 'spin 1s linear infinite' }} />
+      <style>{`@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}`}</style>
+    </div>
+  );
   if (screen === 'auth')       return <AuthScreen />;
   if (screen === 'guild-pick') return <GuildPicker guilds={guilds} loading={guildsLoading} error={guildsError} onSelect={handleGuildSelect} />;
 
-  // ── Games screen ──────────────────────────────────────────
+  var activeFilterCount = filters.genres.length + filters.tags.length + filters.platforms.length + (filters.dates ? 1 : 0) + (filters.ordering !== '-released' ? 1 : 0);
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0f1015' }}>
+    <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', flexDirection: 'column' }}>
       <style>{`
         @keyframes spin   { from{transform:rotate(0deg);}  to{transform:rotate(360deg);} }
-        @keyframes fadeIn { from{opacity:0;transform:translateY(8px);} to{opacity:1;transform:translateY(0);} }
+        @keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
         .scroll-thin::-webkit-scrollbar{width:5px;}
-        .scroll-thin::-webkit-scrollbar-track{background:#1a1b22;}
-        .scroll-thin::-webkit-scrollbar-thumb{background:#3a3a42;border-radius:99px;}
+        .scroll-thin::-webkit-scrollbar-track{background:#111116;}
+        .scroll-thin::-webkit-scrollbar-thumb{background:#2a2b36;border-radius:99px;}
       `}</style>
 
       {/* Header */}
-      <header style={{ background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
+      <header style={{ background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Logo42p size={36} />
+          <Logo42p size={34} />
           <div>
-            <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#f5f3ff', letterSpacing: '-0.02em' }}>42p Games</p>
-            <p style={{ margin: 0, fontSize: 11, color: '#6b6b7a' }}>Upcoming survival multiplayer releases</p>
+            <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#f5f3ff', letterSpacing: '-0.02em' }}>42p Games</p>
+            <p style={{ margin: 0, fontSize: 10, color: '#6b6b7a' }}>Powered by RAWG.io</p>
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* Server indicator + switch */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Mobile filter toggle */}
+          <button onClick={function() { setMobileFilters(function(v) { return !v; }); }}
+            style={{ display: 'none', padding: '7px 12px', borderRadius: 9, border: '0.5px solid #2a2b36', background: activeFilterCount > 0 ? '#6366f122' : 'transparent', color: activeFilterCount > 0 ? '#a5b4fc' : '#8b8ca8', fontSize: 12, fontWeight: 600, alignItems: 'center', gap: 5 }}
+            id="mobile-filter-btn">
+            <i className="ti ti-adjustments-horizontal" style={{ fontSize: 14 }} />
+            Filters {activeFilterCount > 0 && '(' + activeFilterCount + ')'}
+          </button>
+
+          {/* Server switcher */}
           <button onClick={loadGuilds}
             style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 9, border: '0.5px solid #2a2b36', background: 'transparent', cursor: 'pointer', color: '#8b8ca8', fontSize: 12 }}>
             {currentGuild && currentGuild.iconUrl
               ? <img src={currentGuild.iconUrl} alt="" style={{ width: 18, height: 18, borderRadius: 4, objectFit: 'cover' }} />
-              : <div style={{ width: 18, height: 18, borderRadius: 4, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff' }}>{currentGuild && currentGuild.name[0].toUpperCase()}</div>
-            }
+              : <div style={{ width: 18, height: 18, borderRadius: 4, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff' }}>{currentGuild && currentGuild.name[0].toUpperCase()}</div>}
             <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentGuild && currentGuild.name}</span>
             <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
           </button>
 
-          {/* Calendar link */}
           <a href={CALENDAR_URL} style={{ padding: '7px 14px', borderRadius: 9, border: '0.5px solid #2a2b36', background: 'transparent', color: '#8b8ca8', fontSize: 12, fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <i className="ti ti-calendar-event" style={{ fontSize: 14 }} />
-            Calendar
+            <i className="ti ti-calendar-event" style={{ fontSize: 14 }} />Calendar
           </a>
 
-          {/* User */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 9, background: '#6366f115', border: '0.5px solid #6366f133' }}>
             <div style={{ width: 22, height: 22, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700 }}>
               {user && (user.avatar || (user.name && user.name[0].toUpperCase()))}
@@ -432,91 +551,96 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 24px' }}>
+      {/* Body */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
-        {/* Search */}
-        <div style={{ position: 'relative', marginBottom: 24 }}>
-          <i className="ti ti-search" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b6b7a', fontSize: 16, pointerEvents: 'none' }} />
-          <input
-            value={searchQuery}
-            onChange={handleSearchInput}
-            placeholder="Search for any game on RAWG to add to your calendar…"
-            style={{ width: '100%', boxSizing: 'border-box', background: '#1a1b22', border: '0.5px solid #3a3a42', borderRadius: 12, color: '#e8e9f3', padding: '12px 14px 12px 42px', fontSize: 14, outline: 'none' }}
-          />
-          {searching && <i className="ti ti-loader" style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b6b7a', fontSize: 16, animation: 'spin 1s linear infinite' }} />}
-          {searchQuery && <button onClick={function() { setSearchQuery(''); setSearchResults([]); }}
-            style={{ position: 'absolute', right: searching ? 38 : 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b6b7a', cursor: 'pointer', fontSize: 16, padding: 0 }}>✕</button>}
-        </div>
+        {/* Filter panel */}
+        <FilterPanel
+          filters={filters}
+          onChange={updateFilters}
+          onReset={resetFilters}
+          resultCount={totalCount}
+          loading={gamesLoading && page === 1}
+        />
 
-        {/* Filter tabs — only shown when not searching */}
-        {!searchQuery && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
-            <div style={{ display: 'flex', gap: 4, background: '#1a1b22', borderRadius: 10, padding: 4 }}>
-              {[['upcoming', 'Upcoming'], ['all', 'All']].map(function(pair) {
-                var val = pair[0]; var label = pair[1];
-                return (
-                  <button key={val} onClick={function() { setFilter(val); }}
-                    style={{ padding: '6px 16px', borderRadius: 7, border: 'none', fontSize: 12, fontWeight: filter === val ? 600 : 400, background: filter === val ? '#6366f1' : 'transparent', color: filter === val ? '#fff' : '#8b8ca8', cursor: 'pointer', transition: 'all 0.15s' }}>
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            <p style={{ fontSize: 12, color: '#6b6b7a', margin: 0 }}>
-              {trackedGames.length} game{trackedGames.length !== 1 ? 's' : ''} added to <strong style={{ color: '#a5b4fc' }}>{currentGuild && currentGuild.name}</strong>'s calendar
-            </p>
-          </div>
-        )}
+        {/* Main content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }} className="scroll-thin">
 
-        {searchQuery && searchQuery.trim().length >= 2 && !searching && (
-          <p style={{ fontSize: 12, color: '#6b6b7a', marginBottom: 16 }}>
-            {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for "{searchQuery}"
-          </p>
-        )}
-
-        {/* Games grid */}
-        {gamesLoading ? (
-          <div style={{ textAlign: 'center', padding: '60px 0' }}>
-            <i className="ti ti-loader" style={{ fontSize: 32, animation: 'spin 1s linear infinite', color: '#6366f1' }} />
-          </div>
-        ) : displayGames.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b6b7a' }}>
-            <p style={{ fontSize: 40, margin: '0 0 12px' }}>🎮</p>
-            <p style={{ fontSize: 16, color: '#8b8ca8', margin: '0 0 6px' }}>
-              {searchQuery ? 'No games found for "' + searchQuery + '"' : 'No upcoming games found'}
-            </p>
-            <p style={{ fontSize: 13 }}>Try searching for a specific game above.</p>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
-              {displayGames.map(function(game) {
-                return (
-                  <GameCard
-                    key={game.rawgId}
-                    game={game}
-                    isAdded={isTracked(game.rawgId)}
-                    isAdding={addingId === game.rawgId}
-                    onAdd={handleAdd}
-                    onRemove={handleRemove}
-                  />
-                );
-              })}
-            </div>
-
-            {/* Load more — only for browse mode */}
-            {!searchQuery && hasMore && (
-              <div style={{ textAlign: 'center', marginTop: 32 }}>
-                <button
-                  onClick={function() { loadRawgPage(page + 1); }}
-                  style={{ padding: '10px 28px', borderRadius: 10, border: '0.5px solid #6366f155', background: '#6366f122', color: '#a5b4fc', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                  Load more
-                </button>
-              </div>
+          {/* Search bar */}
+          <div style={{ position: 'relative', marginBottom: 20 }}>
+            <i className="ti ti-search" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b6b7a', fontSize: 16, pointerEvents: 'none' }} />
+            <input
+              value={filters.search}
+              onChange={function(e) { updateFilters({ search: e.target.value }); }}
+              placeholder="Search all games on RAWG…"
+              style={{ width: '100%', boxSizing: 'border-box', background: '#1a1b22', border: '0.5px solid #3a3a42', borderRadius: 12, color: '#e8e9f3', padding: '12px 14px 12px 42px', fontSize: 14, outline: 'none' }}
+            />
+            {filters.search && (
+              <button onClick={function() { updateFilters({ search: '' }); }}
+                style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b6b7a', cursor: 'pointer', fontSize: 16, padding: 0 }}>✕</button>
             )}
-          </>
-        )}
-      </main>
+          </div>
+
+          {/* Active filter summary */}
+          {activeFilterCount > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: '#6b6b7a' }}>Active filters:</span>
+              {filters.genres.map(function(id) {
+                var g = GENRES.find(function(x) { return x.id === id; });
+                return g ? <span key={id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#6366f133', color: '#a5b4fc', border: '0.5px solid #6366f155' }}>{g.name}</span> : null;
+              })}
+              {filters.tags.map(function(id) {
+                var t = TAGS.find(function(x) { return x.id === id; });
+                return t ? <span key={id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#7c3aed33', color: '#c4b5fd', border: '0.5px solid #7c3aed55' }}>{t.name}</span> : null;
+              })}
+              {filters.platforms.map(function(id) {
+                var p = PLATFORMS.find(function(x) { return x.id === id; });
+                return p ? <span key={id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#0e7490', color: '#a5f3fc', border: '0.5px solid #06b6d455' }}>{p.name}</span> : null;
+              })}
+              {filters.dates && <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#16a34a22', color: '#86efac', border: '0.5px solid #16a34a55' }}>{DATE_PRESETS.find(function(p) { return p.value === filters.dates; })?.label || 'Custom dates'}</span>}
+              <button onClick={resetFilters} style={{ fontSize: 11, color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginLeft: 4 }}>Clear all</button>
+            </div>
+          )}
+
+          {/* Games grid */}
+          {gamesLoading && page === 1 ? (
+            <div style={{ textAlign: 'center', padding: '60px 0' }}>
+              <i className="ti ti-loader" style={{ fontSize: 32, animation: 'spin 1s linear infinite', color: '#6366f1' }} />
+            </div>
+          ) : games.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b6b7a' }}>
+              <p style={{ fontSize: 40, margin: '0 0 12px' }}>🎮</p>
+              <p style={{ fontSize: 16, color: '#8b8ca8', margin: '0 0 6px' }}>No games found</p>
+              <p style={{ fontSize: 13 }}>Try adjusting the filters or search for a different game.</p>
+              {activeFilterCount > 0 && <button onClick={resetFilters} style={{ marginTop: 12, padding: '8px 18px', borderRadius: 9, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Reset filters</button>}
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 14 }}>
+                {games.map(function(game) {
+                  return (
+                    <GameCard key={game.rawgId} game={game}
+                      isAdded={isTracked(game.rawgId)}
+                      isAdding={addingId === game.rawgId}
+                      onAdd={handleAdd} onRemove={handleRemove} />
+                  );
+                })}
+              </div>
+
+              {hasMore && (
+                <div style={{ textAlign: 'center', marginTop: 28 }}>
+                  <button
+                    onClick={function() { fetchGames(filters, page + 1); }}
+                    disabled={gamesLoading}
+                    style={{ padding: '10px 28px', borderRadius: 10, border: '0.5px solid #6366f155', background: '#6366f122', color: '#a5b4fc', cursor: gamesLoading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    {gamesLoading ? <><i className="ti ti-loader" style={{ fontSize: 14, animation: 'spin 1s linear infinite' }} />Loading…</> : 'Load more games'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
