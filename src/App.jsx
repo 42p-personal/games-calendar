@@ -96,14 +96,16 @@ async function apiFetch(method, path, body, guildId) {
 }
 
 function buildRawgQuery(filters, page) {
-  var params = new URLSearchParams();
+  var params    = new URLSearchParams();
+  var hasSearch = filters.search && filters.search.trim().length >= 2;
   params.set('page', page || 1);
   if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
   if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
   if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
   if (filters.dates)            params.set('dates',     filters.dates);
-  if (filters.ordering)         params.set('ordering',  filters.ordering);
-  if (filters.search && filters.search.trim().length >= 2) params.set('search', filters.search.trim());
+  // When searching, omit ordering so RAWG ranks by relevance instead of date
+  if (filters.ordering && !hasSearch) params.set('ordering', filters.ordering);
+  if (hasSearch) params.set('search', filters.search.trim());
   return params.toString();
 }
 
