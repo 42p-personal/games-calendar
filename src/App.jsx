@@ -4,6 +4,7 @@ const API_URL      = import.meta.env.VITE_API_URL ?? '';
 const GUILD_KEY    = 'dc_guild';
 const FILTERS_KEY  = 'dc_game_filters';
 const CALENDAR_URL = 'https://calendar.42p.uk';
+const TODAY        = new Date();
 
 // ─── RAWG reference data ──────────────────────────────────────
 
@@ -61,7 +62,7 @@ const DATE_PRESETS = [
   { value: new Date().toISOString().slice(0,10) + ',2099-12-31',                  label: 'Upcoming' },
   { value: new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10), label: 'This year' },
   { value: new Date(Date.now()-90*24*60*60*1000).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10),  label: 'Last 3 months' },
-  { value: 'tba',                                                                   label: 'TBA & Early Access' },
+  { value: 'tba',                                                                   label: 'TBA / Early Access' },
 ];
 
 const ORDERINGS = [
@@ -102,23 +103,25 @@ function buildRawgQuery(filters, page) {
   var hasSearch = filters.search && filters.search.trim().length >= 2;
   params.set('page', page || 1);
 
-  if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
-  if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
+  var genres    = filters.genres    || [];
+  var platforms = filters.platforms || [];
+  var tags      = filters.tags      || [];
+
+  if (genres.length)    params.set('genres',    genres.join(','));
+  if (platforms.length) params.set('platforms', platforms.join(','));
 
   if (hasSearch) {
     params.set('search', filters.search.trim());
-    // No ordering during search — let RAWG rank by relevance (its default when search is set).
-    // Widen to all dates so RAWG includes unreleased/TBA games in search results.
     params.set('dates', '1980-01-01,2099-12-31');
-    // Genre/platform/tag filters still apply to narrow the search space
-    if (filters.tags && filters.tags.length) params.set('tags', filters.tags.join(','));
-  } else {
-    // TBA mode: no dates filter — fetchGames drives this with separate requests
-    var tags = filters.tags || [];
     if (tags.length) params.set('tags', tags.join(','));
-    if (filters.dates && filters.dates !== 'tba') {
-      params.set('dates',   filters.dates);
-    }
+  } else if (filters.tba) {
+    // Use RAWG's server-side tba filter — much more accurate than client-side filtering
+    params.set('tba', 'true');
+    params.set('ordering', '-added');
+    if (tags.length) params.set('tags', tags.join(','));
+  } else {
+    if (tags.length) params.set('tags', tags.join(','));
+    if (filters.dates && filters.dates !== 'tba') params.set('dates', filters.dates);
     if (filters.ordering) params.set('ordering', filters.ordering);
   }
 
@@ -191,7 +194,7 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading, gameCou
       {/* Result count */}
       <p style={{ margin: 0, fontSize: 11, color: '#6b6b7a' }}>
         {loading ? 'Loading…' : filters.dates === 'tba'
-          ? (gameCount > 0 ? gameCount + ' TBA / EA games found' : 'Scanning for TBA & Early Access…')
+          ? (gameCount > 0 ? gameCount + ' TBA / EA games found' : 'Scanning TBA & Early Access…')
           : resultCount.toLocaleString() + ' games'}
       </p>
 
@@ -326,9 +329,8 @@ function GuildPicker({ guilds, loading, error, onSelect }) {
 
 // ─── Game card ────────────────────────────────────────────────
 function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
-  var today       = new Date();
   var releaseDate = game.releaseDate ? new Date(game.releaseDate) : null;
-  var daysUntil   = releaseDate ? Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24)) : null;
+  var daysUntil   = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
   var [hoverRemove, setHoverRemove] = useState(false);
 
   return (
@@ -493,9 +495,8 @@ function MobileFilterSheet({ filters, onChange, onReset, onClose, resultCount, l
 
 // ─── Mobile game card (compact) ──────────────────────────────
 function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
-  var today       = new Date();
   var releaseDate = game.releaseDate ? new Date(game.releaseDate) : null;
-  var daysUntil   = releaseDate ? Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24)) : null;
+  var daysUntil   = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
   var [hoverRemove, setHoverRemove] = useState(false);
 
   var badge = game.tba && !releaseDate ? { label: 'TBA', bg: '#7c3aed' }
@@ -572,7 +573,6 @@ export default function App() {
     catch (e) { return DEFAULT_FILTERS; }
   });
 
-  var [mobileFilters,     setMobileFilters]     = useState(false);
   var [mobileFilterSheet, setMobileFilterSheet] = useState(false);
   var [isMobile,          setIsMobile]          = useState(function() { return window.innerWidth < 768; });
   var fetchTimeout = useRef(null);
@@ -602,12 +602,15 @@ export default function App() {
   useEffect(function() {
     if (screen !== 'games' || !currentGuild) return;
     var gId = currentGuild.id;
+    var refreshing = false;
     async function refreshTracked() {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' || refreshing) return;
+      refreshing = true;
       try {
         var tracked = await apiFetch('GET', '/api/games', null, gId);
         setTrackedGames(tracked);
       } catch (e) { /* silent */ }
+      finally { refreshing = false; }
     }
     var id = setInterval(refreshTracked, 60000);
     document.addEventListener('visibilitychange', refreshTracked);
@@ -652,37 +655,47 @@ export default function App() {
     setGamesLoading(true);
     try {
       if (isTba) {
-        // RAWG has no server-side TBA filter — tba is a response field, not a query param.
-        // Strategy: two parallel requests per page —
-        //   1. Scan the general catalogue client-side for games where tba===true
-        //      (games with no announced release date at all)
-        //   2. Fetch upcoming games (release date today → 2099) ordered by popularity
-        //      This catches games in alpha/beta/EA that have a future release date,
-        //      while excluding fully-released games whose date is in the past.
-        // Merge and deduplicate — TBA games first, then upcoming.
-        var today  = new Date().toISOString().slice(0, 10);
-        var baseF  = Object.assign({}, f, { dates: '',                        ordering: '-added' });
-        var upcomF = Object.assign({}, f, { dates: today + ',2099-12-31',     ordering: '-added' });
+        // Three queries cover all TBA/Early Access categories:
+        //   1. TBA — no date announced (server-side ?tba=true filter)
+        //   2. Upcoming — future release date (entering EA soon, or full release)
+        //   3. Currently in Early Access — released in the past but tagged early-access
+        var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        var base     = { genres: f.genres, platforms: f.platforms, tags: f.tags || [], search: '' };
+        // For the EA query, always include the early-access tag on top of the user's tags
+        var eaTags   = (f.tags || []).includes('early-access')
+          ? (f.tags || [])
+          : (f.tags || []).concat(['early-access']);
+
+        var tbaQ  = buildRawgQuery(Object.assign({}, base, { tba: true }), p);
+        var upQ   = buildRawgQuery(Object.assign({}, base, { dates: tomorrow + ',2099-12-31', ordering: '-added' }), p);
+        var eaQ   = buildRawgQuery(Object.assign({}, base, { tags: eaTags, dates: tomorrow + ',2099-12-31', ordering: '-added' }), p);
 
         var results = await Promise.all([
-          apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(baseF, p), null, gId)
-            .catch(function() { return { results: [], next: false }; }),
-          apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(upcomF, p), null, gId)
-            .catch(function() { return { results: [], next: false }; }),
+          apiFetch('GET', '/api/rawg/games?' + tbaQ,  null, gId).catch(function() { return { results: [], next: false }; }),
+          apiFetch('GET', '/api/rawg/games?' + upQ,   null, gId).catch(function() { return { results: [], next: false }; }),
+          apiFetch('GET', '/api/rawg/games?' + eaQ,   null, gId).catch(function() { return { results: [], next: false }; }),
         ]);
 
-        var tbaGames     = (results[0].results || []).filter(function(g) { return g.tba === true; });
-        var upcomingGames = results[1].results || [];
+        // Merge: TBA first, then upcoming, then current EA — deduplicate by rawgId
+        var seen   = {};
+        var merged = [];
+        [results[0].results || [], results[1].results || [], results[2].results || []].forEach(function(chunk) {
+          chunk.forEach(function(g) {
+            if (!seen[g.rawgId]) { seen[g.rawgId] = true; merged.push(g); }
+          });
+        });
 
-        // Merge: TBA (no date) first, then upcoming (future date), skip duplicates
-        var seen = {};
-        tbaGames.forEach(function(g) { seen[g.rawgId] = true; });
-        var merged = tbaGames.concat(upcomingGames.filter(function(g) { return !seen[g.rawgId]; }));
-
-        if (p === 1) setGames(merged);
-        else setGames(function(prev) { return prev.concat(merged); });
+        if (p === 1) {
+          setGames(merged);
+        } else {
+          setGames(function(prev) {
+            var prevIds = {};
+            prev.forEach(function(g) { prevIds[g.rawgId] = true; });
+            return prev.concat(merged.filter(function(g) { return !prevIds[g.rawgId]; }));
+          });
+        }
         setTotalCount(0);
-        setHasMore(!!results[0].next || !!results[1].next);
+        setHasMore(results[0].next || results[1].next || results[2].next);
         setPage(p);
       } else {
         var qs   = buildRawgQuery(f, p);
@@ -888,14 +901,6 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Mobile filter toggle */}
-          <button onClick={function() { setMobileFilters(function(v) { return !v; }); }}
-            style={{ display: 'none', padding: '7px 12px', borderRadius: 9, border: '0.5px solid #2a2b36', background: activeFilterCount > 0 ? '#6366f122' : 'transparent', color: activeFilterCount > 0 ? '#a5b4fc' : '#8b8ca8', fontSize: 12, fontWeight: 600, alignItems: 'center', gap: 5 }}
-            id="mobile-filter-btn">
-            <i className="ti ti-adjustments-horizontal" style={{ fontSize: 14 }} />
-            Filters {activeFilterCount > 0 && '(' + activeFilterCount + ')'}
-          </button>
-
           {/* Server switcher */}
           <button onClick={loadGuilds}
             style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 9, border: '0.5px solid #2a2b36', background: 'transparent', cursor: 'pointer', color: '#8b8ca8', fontSize: 12 }}>
