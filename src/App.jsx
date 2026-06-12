@@ -221,7 +221,7 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading, gameCou
       <div>
         <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Sort by</p>
         {filters.dates === 'tba' ? (
-          <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Sorted by popularity (fixed for TBA & Early Access)</p>
+          <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Sorted by popularity (fixed for TBA & upcoming)</p>
         ) : (
           <select value={filters.ordering} onChange={function(e) { onChange({ ordering: e.target.value }); }}
             style={{ width: '100%', background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 8, color: '#e8e9f3', padding: '7px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
@@ -480,26 +480,29 @@ export default function App() {
         // RAWG has no server-side TBA filter — tba is a response field, not a query param.
         // Strategy: two parallel requests per page —
         //   1. Scan the general catalogue client-side for games where tba===true
-        //   2. Fetch games tagged 'early-access' (EA games have a release date, not tba)
-        // Merge and deduplicate so one button covers both groups.
-        var baseF = Object.assign({}, f, { dates: '', ordering: '-added' });
-        var eaTags = (f.tags || []).filter(function(t) { return t !== 'early-access'; }).concat('early-access');
-        var eaF   = Object.assign({}, baseF, { tags: eaTags });
+        //      (games with no announced release date at all)
+        //   2. Fetch upcoming games (release date today → 2099) ordered by popularity
+        //      This catches games in alpha/beta/EA that have a future release date,
+        //      while excluding fully-released games whose date is in the past.
+        // Merge and deduplicate — TBA games first, then upcoming.
+        var today  = new Date().toISOString().slice(0, 10);
+        var baseF  = Object.assign({}, f, { dates: '',                        ordering: '-added' });
+        var upcomF = Object.assign({}, f, { dates: today + ',2099-12-31',     ordering: '-added' });
 
         var results = await Promise.all([
           apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(baseF, p), null, gId)
             .catch(function() { return { results: [], next: false }; }),
-          apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(eaF, p), null, gId)
+          apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(upcomF, p), null, gId)
             .catch(function() { return { results: [], next: false }; }),
         ]);
 
-        var tbaGames = (results[0].results || []).filter(function(g) { return g.tba === true; });
-        var eaGames  = results[1].results || [];
+        var tbaGames     = (results[0].results || []).filter(function(g) { return g.tba === true; });
+        var upcomingGames = results[1].results || [];
 
-        // Merge: TBA games first, then EA games, skip duplicates
+        // Merge: TBA (no date) first, then upcoming (future date), skip duplicates
         var seen = {};
         tbaGames.forEach(function(g) { seen[g.rawgId] = true; });
-        var merged = tbaGames.concat(eaGames.filter(function(g) { return !seen[g.rawgId]; }));
+        var merged = tbaGames.concat(upcomingGames.filter(function(g) { return !seen[g.rawgId]; }));
 
         if (p === 1) setGames(merged);
         else setGames(function(prev) { return prev.concat(merged); });
