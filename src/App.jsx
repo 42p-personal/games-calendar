@@ -598,6 +598,25 @@ export default function App() {
       .catch(function() { setScreen('auth'); });
   }, []);
 
+  // Auto-refresh tracked games list every 60 seconds (picks up other users' additions)
+  useEffect(function() {
+    if (screen !== 'games' || !currentGuild) return;
+    var gId = currentGuild.id;
+    async function refreshTracked() {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        var tracked = await apiFetch('GET', '/api/games', null, gId);
+        setTrackedGames(tracked);
+      } catch (e) { /* silent */ }
+    }
+    var id = setInterval(refreshTracked, 60000);
+    document.addEventListener('visibilitychange', refreshTracked);
+    return function() {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', refreshTracked);
+    };
+  }, [screen, currentGuild]);
+
   // Refetch when filters change — debounce search input, instant for other filter changes
   useEffect(function() {
     if (screen !== 'games' || !currentGuild) return;
