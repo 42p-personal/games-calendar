@@ -57,7 +57,7 @@ const PLATFORMS = [
 
 const DATE_PRESETS = [
   { value: '',                                                                      label: 'All time' },
-  { value: new Date().toISOString().slice(0,10) + ',2030-12-31',                  label: 'Upcoming' },
+  { value: new Date().toISOString().slice(0,10) + ',2099-12-31',                  label: 'Upcoming' },
   { value: new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10), label: 'This year' },
   { value: new Date(Date.now()-90*24*60*60*1000).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10),  label: 'Last 3 months' },
   { value: 'tba',                                                                   label: 'TBA only' },
@@ -102,25 +102,31 @@ function buildRawgQuery(filters, page) {
   params.set('page', page || 1);
 
   if (hasSearch) {
-    // When searching by name, drop date/ordering filters so all matching
-    // games are returned regardless of release date or status
     params.set('search',         filters.search.trim());
     params.set('search_precise', 'true');
-    // Still allow genre/tag/platform filters when searching
+    // Genre/tag/platform filters still apply during search; dates/tba do not
     if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
     if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
     if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
+    // Keep non-date ordering during search (e.g. rating, name)
+    if (filters.ordering && filters.ordering !== '-released') {
+      params.set('ordering', filters.ordering);
+    }
   } else {
     if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
     if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
     if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
     if (filters.dates === 'tba') {
-      // RAWG tba=true returns only games with no confirmed release date
-      params.set('tba', 'true');
+      // RAWG tba=true returns only games with no confirmed release date.
+      // Ordering by -released breaks TBA results (no date to sort by); use popularity.
+      params.set('tba',      'true');
+      params.set('ordering', '-added');
     } else if (filters.dates) {
-      params.set('dates', filters.dates);
+      params.set('dates',    filters.dates);
+      if (filters.ordering) params.set('ordering', filters.ordering);
+    } else {
+      if (filters.ordering) params.set('ordering', filters.ordering);
     }
-    if (filters.ordering)         params.set('ordering',  filters.ordering);
   }
 
   return params.toString();
@@ -197,7 +203,10 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
       {/* Release window */}
       <div>
         <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Release window</p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {filters.search && filters.search.trim().length >= 2 && (
+          <p style={{ margin: '0 0 6px', fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Ignored during search</p>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, opacity: (filters.search && filters.search.trim().length >= 2) ? 0.4 : 1, transition: 'opacity 0.15s' }}>
           {DATE_PRESETS.map(function(p) {
             var active = filters.dates === p.value;
             return (
@@ -213,10 +222,14 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
       {/* Sort */}
       <div>
         <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Sort by</p>
-        <select value={filters.ordering} onChange={function(e) { onChange({ ordering: e.target.value }); }}
-          style={{ width: '100%', background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 8, color: '#e8e9f3', padding: '7px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
-          {ORDERINGS.map(function(o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
-        </select>
+        {filters.dates === 'tba' ? (
+          <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Sorted by popularity for TBA games</p>
+        ) : (
+          <select value={filters.ordering} onChange={function(e) { onChange({ ordering: e.target.value }); }}
+            style={{ width: '100%', background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 8, color: '#e8e9f3', padding: '7px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
+            {ORDERINGS.map(function(o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
+          </select>
+        )}
       </div>
 
       {/* Genres */}
