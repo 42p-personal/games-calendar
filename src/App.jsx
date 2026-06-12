@@ -399,6 +399,157 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
   );
 }
 
+// ─── Mobile filter sheet ─────────────────────────────────────
+function MobileFilterSheet({ filters, onChange, onReset, onClose, resultCount, loading, gameCount }) {
+  var hasFilters = filters.genres.length > 0 || filters.tags.length > 0 ||
+    filters.platforms.length > 0 || filters.dates !== '' || filters.ordering !== '-released';
+
+  var S = {
+    overlay:  { position: 'fixed', inset: 0, zIndex: 800, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' },
+    sheet:    { position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 900, background: '#111116', borderRadius: '20px 20px 0 0', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 -8px 40px rgba(0,0,0,0.5)' },
+    pill:     { width: 36, height: 4, borderRadius: 99, background: '#2a2b36', margin: '12px auto 0' },
+    hdr:      { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px 10px' },
+    body:     { overflowY: 'auto', padding: '0 18px 24px', display: 'flex', flexDirection: 'column', gap: 20 },
+    label:    { margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' },
+    done:     { margin: '8px 18px 16px', height: 48, borderRadius: 14, background: '#6366f1', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer' },
+  };
+
+  return (
+    <>
+      <div style={S.overlay} onClick={onClose} />
+      <div style={S.sheet}>
+        <div style={S.pill} />
+        <div style={S.hdr}>
+          <span style={{ fontWeight: 700, fontSize: 16, color: '#e8e9f3' }}>Filters</span>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: '#52536a' }}>
+              {loading ? 'Loading…' : filters.dates === 'tba' ? gameCount + ' found' : resultCount.toLocaleString() + ' games'}
+            </span>
+            {hasFilters && <button onClick={onReset} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: 12, cursor: 'pointer', padding: 0, fontWeight: 600 }}>Reset</button>}
+          </div>
+        </div>
+
+        <div style={S.body}>
+          {/* Release window */}
+          <div>
+            <p style={S.label}>Release window</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {DATE_PRESETS.map(function(p) {
+                var active = filters.dates === p.value;
+                return (
+                  <button key={p.value} onClick={function() { onChange({ dates: p.value }); }}
+                    style={{ padding: '6px 12px', borderRadius: 99, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 12, fontWeight: active ? 700 : 400, cursor: 'pointer' }}>
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Sort */}
+          <div>
+            <p style={S.label}>Sort by</p>
+            {filters.dates === 'tba' ? (
+              <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Fixed for TBA & EA</p>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {ORDERINGS.map(function(o) {
+                  var active = filters.ordering === o.value;
+                  return (
+                    <button key={o.value} onClick={function() { onChange({ ordering: o.value }); }}
+                      style={{ padding: '6px 12px', borderRadius: 99, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 12, fontWeight: active ? 700 : 400, cursor: 'pointer' }}>
+                      {o.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Genres */}
+          <div>
+            <p style={S.label}>Genres {filters.genres.length > 0 && <span style={{ color: '#6366f1' }}>({filters.genres.length})</span>}</p>
+            <ChipGroup items={GENRES} selected={filters.genres} onToggle={function(id) { onChange({ genres: toggleItem(filters.genres, id) }); }} />
+          </div>
+
+          {/* Tags */}
+          <div>
+            <p style={S.label}>Tags {filters.tags.length > 0 && <span style={{ color: '#6366f1' }}>({filters.tags.length})</span>}</p>
+            <ChipGroup items={TAGS} selected={filters.tags} onToggle={function(id) { onChange({ tags: toggleItem(filters.tags, id) }); }} />
+          </div>
+
+          {/* Platforms */}
+          <div>
+            <p style={S.label}>Platforms {filters.platforms.length > 0 && <span style={{ color: '#6366f1' }}>({filters.platforms.length})</span>}</p>
+            <ChipGroup items={PLATFORMS} selected={filters.platforms} onToggle={function(id) { onChange({ platforms: toggleItem(filters.platforms, id) }); }} />
+          </div>
+        </div>
+
+        <button style={S.done} onClick={onClose}>Done</button>
+      </div>
+    </>
+  );
+}
+
+// ─── Mobile game card (compact) ──────────────────────────────
+function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
+  var today       = new Date();
+  var releaseDate = game.releaseDate ? new Date(game.releaseDate) : null;
+  var daysUntil   = releaseDate ? Math.ceil((releaseDate - today) / (1000 * 60 * 60 * 24)) : null;
+  var [hoverRemove, setHoverRemove] = useState(false);
+
+  var badge = game.tba && !releaseDate ? { label: 'TBA', bg: '#7c3aed' }
+    : daysUntil !== null ? { label: daysUntil <= 0 ? 'OUT' : daysUntil === 1 ? 'TMW' : daysUntil + 'd', bg: daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1' }
+    : null;
+
+  return (
+    <div style={{ background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      {/* Cover */}
+      <div style={{ position: 'relative', paddingTop: '56%', background: '#111116' }}>
+        {game.coverUrl
+          ? <img src={game.coverUrl} alt={game.name} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+          : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, background: 'linear-gradient(135deg,#1e1f28,#2a1f4e)' }}>🎮</div>}
+        {badge && (
+          <div style={{ position: 'absolute', top: 6, right: 6, borderRadius: 6, padding: '3px 7px', fontSize: 10, fontWeight: 700, color: '#fff', background: badge.bg }}>
+            {badge.label}
+          </div>
+        )}
+        {game.rating > 0 && (
+          <div style={{ position: 'absolute', top: 6, left: 6, borderRadius: 5, padding: '2px 6px', fontSize: 10, fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,0.75)' }}>
+            ★ {game.rating.toFixed(1)}
+          </div>
+        )}
+      </div>
+
+      {/* Info */}
+      <div style={{ padding: '10px 10px 4px', flex: 1 }}>
+        <p style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#e8e9f3', lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{game.name}</p>
+        <p style={{ margin: '3px 0 0', fontSize: 10, color: releaseDate ? '#a78bfa' : '#52536a', fontWeight: releaseDate ? 600 : 400 }}>
+          {releaseDate ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBC'}
+        </p>
+      </div>
+
+      {/* Action */}
+      <div style={{ padding: '6px 10px 10px' }}>
+        {isAdded ? (
+          <button
+            onClick={function() { onRemove(game); }}
+            onMouseEnter={function() { setHoverRemove(true); }}
+            onMouseLeave={function() { setHoverRemove(false); }}
+            style={{ width: '100%', padding: '6px', borderRadius: 8, border: hoverRemove ? '0.5px solid #ff555544' : '0.5px solid #16a34a55', background: hoverRemove ? '#ff000015' : '#16a34a15', color: hoverRemove ? '#ff7070' : '#86efac', cursor: 'pointer', fontSize: 11, fontWeight: 600, transition: 'all 0.15s' }}>
+            {hoverRemove ? '✕ Remove' : '✓ Added'}
+          </button>
+        ) : (
+          <button onClick={function() { onAdd(game); }} disabled={isAdding}
+            style={{ width: '100%', padding: '6px', borderRadius: 8, border: 'none', background: isAdding ? '#3730a3' : '#6366f1', color: '#fff', cursor: isAdding ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 700, transition: 'background 0.15s' }}>
+            {isAdding ? '…' : '＋ Add to calendar'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────
 export default function App() {
   var [screen,        setScreen]        = useState('loading');
@@ -421,8 +572,16 @@ export default function App() {
     catch (e) { return DEFAULT_FILTERS; }
   });
 
-  var [mobileFilters, setMobileFilters] = useState(false);
+  var [mobileFilters,     setMobileFilters]     = useState(false);
+  var [mobileFilterSheet, setMobileFilterSheet] = useState(false);
+  var [isMobile,          setIsMobile]          = useState(function() { return window.innerWidth < 768; });
   var fetchTimeout = useRef(null);
+
+  useEffect(function() {
+    function onResize() { setIsMobile(window.innerWidth < 768); }
+    window.addEventListener('resize', onResize);
+    return function() { window.removeEventListener('resize', onResize); };
+  }, []);
 
   // Bootstrap
   useEffect(function() {
@@ -567,6 +726,120 @@ export default function App() {
   if (screen === 'guild-pick') return <GuildPicker guilds={guilds} loading={guildsLoading} error={guildsError} onSelect={handleGuildSelect} />;
 
   var activeFilterCount = filters.genres.length + filters.tags.length + filters.platforms.length + (filters.dates ? 1 : 0) + (filters.ordering !== '-released' ? 1 : 0);
+
+  // ── Mobile layout ─────────────────────────────────────────
+  if (isMobile) {
+    return (
+      <div style={{ minHeight: '100dvh', background: '#0f1015', display: 'flex', flexDirection: 'column', color: '#e8e9f3', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+        <style>{`
+          @keyframes spin { from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+          @keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+          .mob-game-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; padding: 0 12px 24px; }
+        `}</style>
+
+        {/* Sticky header */}
+        <header style={{ position: 'sticky', top: 0, zIndex: 100, background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Logo42p size={28} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#f5f3ff', letterSpacing: '-0.02em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>42p Games</p>
+            <p style={{ margin: 0, fontSize: 9, color: '#6b6b7a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentGuild ? currentGuild.name : 'No server'}</p>
+          </div>
+          <button onClick={function() { setMobileFilterSheet(true); }}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 10, border: activeFilterCount > 0 ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: activeFilterCount > 0 ? '#6366f122' : 'transparent', color: activeFilterCount > 0 ? '#a5b4fc' : '#8b8ca8', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+            ⚙ Filters{activeFilterCount > 0 ? ' (' + activeFilterCount + ')' : ''}
+          </button>
+          <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+            {user && (user.avatar || (user.name && user.name[0].toUpperCase()))}
+          </div>
+        </header>
+
+        {/* Search bar */}
+        <div style={{ padding: '10px 12px 6px', position: 'relative' }}>
+          <span style={{ position: 'absolute', left: 24, top: '50%', transform: 'translateY(-50%)', color: '#6b6b7a', fontSize: 15, pointerEvents: 'none' }}>🔍</span>
+          <input
+            value={filters.search}
+            onChange={function(e) { updateFilters({ search: e.target.value }); }}
+            placeholder="Search games…"
+            style={{ width: '100%', boxSizing: 'border-box', background: '#1a1b22', border: '0.5px solid #3a3a42', borderRadius: 12, color: '#e8e9f3', padding: '11px 36px 11px 40px', fontSize: 14, outline: 'none' }}
+          />
+          {filters.search && (
+            <button onClick={function() { updateFilters({ search: '' }); }}
+              style={{ position: 'absolute', right: 24, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b6b7a', cursor: 'pointer', fontSize: 16, padding: 0 }}>✕</button>
+          )}
+        </div>
+
+        {/* Quick date chip strip */}
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '4px 12px 10px', scrollbarWidth: 'none' }}>
+          {DATE_PRESETS.map(function(p) {
+            var active = filters.dates === p.value;
+            return (
+              <button key={p.value} onClick={function() { updateFilters({ dates: p.value }); }}
+                style={{ flex: 'none', padding: '5px 12px', borderRadius: 99, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 11, fontWeight: active ? 700 : 400, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Result count */}
+        <div style={{ padding: '0 14px 8px', fontSize: 11, color: '#52536a' }}>
+          {gamesLoading && page === 1 ? 'Loading…'
+            : filters.dates === 'tba' ? (games.length > 0 ? games.length + ' TBA / EA games' : 'Scanning…')
+            : totalCount.toLocaleString() + ' games'}
+        </div>
+
+        {/* Games grid */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {gamesLoading && page === 1 ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 10, color: '#8b8ca8' }}>
+              <i className="ti ti-loader" style={{ fontSize: 24, animation: 'spin 1s linear infinite', color: '#6366f1' }} /> Loading…
+            </div>
+          ) : games.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '50px 20px', color: '#6b6b7a' }}>
+              <p style={{ fontSize: 36, margin: '0 0 10px' }}>🎮</p>
+              <p style={{ fontSize: 15, color: '#8b8ca8', margin: '0 0 6px' }}>No games found</p>
+              <p style={{ fontSize: 12 }}>Try adjusting the filters or search.</p>
+              {activeFilterCount > 0 && <button onClick={resetFilters} style={{ marginTop: 12, padding: '8px 18px', borderRadius: 9, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Reset filters</button>}
+            </div>
+          ) : (
+            <>
+              <div className="mob-game-grid">
+                {games.map(function(game) {
+                  return (
+                    <MobileGameCard key={game.rawgId} game={game}
+                      isAdded={isTracked(game.rawgId)}
+                      isAdding={addingId === game.rawgId}
+                      onAdd={handleAdd} onRemove={handleRemove} />
+                  );
+                })}
+              </div>
+              {hasMore && (
+                <div style={{ padding: '8px 12px 24px', textAlign: 'center' }}>
+                  <button onClick={function() { fetchGames(filters, page + 1); }} disabled={gamesLoading}
+                    style={{ width: '100%', padding: '12px', borderRadius: 12, border: '0.5px solid #6366f155', background: '#6366f122', color: '#a5b4fc', cursor: gamesLoading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    {gamesLoading ? <><i className="ti ti-loader" style={{ fontSize: 13, animation: 'spin 1s linear infinite' }} />Loading…</> : 'Load more games'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Filter bottom sheet */}
+        {mobileFilterSheet && (
+          <MobileFilterSheet
+            filters={filters}
+            onChange={updateFilters}
+            onReset={function() { resetFilters(); setMobileFilterSheet(false); }}
+            onClose={function() { setMobileFilterSheet(false); }}
+            resultCount={totalCount}
+            loading={gamesLoading && page === 1}
+            gameCount={games.length}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', flexDirection: 'column' }}>
