@@ -695,9 +695,16 @@ export default function App() {
   async function handleAdd(game) {
     setAddingId(game.rawgId);
     try {
+      // Fetch Steam URL from RAWG stores endpoint (best-effort — null if unavailable)
+      var steamUrl = null;
+      try {
+        var storesData = await apiFetch('GET', '/api/rawg/games/' + game.rawgId + '/stores', null, currentGuild.id);
+        steamUrl = storesData.steamUrl || null;
+      } catch (e) { /* non-fatal */ }
+
       var saved = await apiFetch('POST', '/api/games', {
         rawgId: game.rawgId, name: game.name, releaseDate: game.releaseDate,
-        coverUrl: game.coverUrl, platforms: game.platforms,
+        coverUrl: game.coverUrl, platforms: game.platforms, steamUrl: steamUrl,
       }, currentGuild.id);
       setTrackedGames(function(prev) { return prev.concat(saved); });
     } catch (err) { alert(err.message); }
