@@ -26,22 +26,23 @@ const GENRES = [
 ];
 
 const TAGS = [
-  { id: 7,    name: 'Multiplayer' },
-  { id: 31,   name: 'Singleplayer' },
-  { id: 8,    name: 'Online' },
-  { id: 799,  name: 'Survival' },
-  { id: 13,   name: 'Atmospheric' },
-  { id: 42,   name: 'Open World' },
-  { id: 24,   name: 'Story Rich' },
-  { id: 4,    name: 'Horror' },
-  { id: 198,  name: 'Co-op' },
-  { id: 397,  name: 'Roguelike' },
-  { id: 121,  name: 'Sandbox' },
-  { id: 149,  name: 'First-Person' },
-  { id: 4026, name: 'Third Person' },
-  { id: 693,  name: 'Stealth' },
-  { id: 75,   name: '2D' },
-  { id: 79,   name: '3D' },
+  { id: 7,              name: 'Multiplayer' },
+  { id: 31,             name: 'Singleplayer' },
+  { id: 8,              name: 'Online' },
+  { id: 799,            name: 'Survival' },
+  { id: 13,             name: 'Atmospheric' },
+  { id: 42,             name: 'Open World' },
+  { id: 24,             name: 'Story Rich' },
+  { id: 4,              name: 'Horror' },
+  { id: 198,            name: 'Co-op' },
+  { id: 397,            name: 'Roguelike' },
+  { id: 121,            name: 'Sandbox' },
+  { id: 149,            name: 'First-Person' },
+  { id: 4026,           name: 'Third Person' },
+  { id: 693,            name: 'Stealth' },
+  { id: 75,             name: '2D' },
+  { id: 79,             name: '3D' },
+  { id: 'early-access', name: 'Early Access' },
 ];
 
 const PLATFORMS = [
@@ -60,7 +61,7 @@ const DATE_PRESETS = [
   { value: new Date().toISOString().slice(0,10) + ',2099-12-31',                  label: 'Upcoming' },
   { value: new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10), label: 'This year' },
   { value: new Date(Date.now()-90*24*60*60*1000).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10),  label: 'Last 3 months' },
-  { value: 'tba',                                                                   label: 'TBA only' },
+  { value: 'tba',                                                                   label: 'TBA & Early Access' },
 ];
 
 const ORDERINGS = [
@@ -101,32 +102,27 @@ function buildRawgQuery(filters, page) {
   var hasSearch = filters.search && filters.search.trim().length >= 2;
   params.set('page', page || 1);
 
+  if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
+  if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
+
   if (hasSearch) {
-    params.set('search',         filters.search.trim());
-    params.set('search_precise', 'true');
-    // Genre/tag/platform filters still apply during search; dates/tba do not
-    if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
-    if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
-    if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
-    // Keep non-date ordering during search (e.g. rating, name)
+    params.set('search', filters.search.trim());
+    // Don't use search_precise — it can block TBA/new games with partial index coverage.
+    // Widen to all dates so RAWG includes unreleased games in search results.
+    params.set('dates', '1980-01-01,2099-12-31');
+    // Pass along tag filters during search
+    if (filters.tags && filters.tags.length) params.set('tags', filters.tags.join(','));
     if (filters.ordering && filters.ordering !== '-released') {
       params.set('ordering', filters.ordering);
     }
   } else {
-    if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
-    if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
-    if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
-    if (filters.dates === 'tba') {
-      // RAWG tba=true returns only games with no confirmed release date.
-      // Ordering by -released breaks TBA results (no date to sort by); use popularity.
-      params.set('tba',      'true');
-      params.set('ordering', '-added');
-    } else if (filters.dates) {
-      params.set('dates',    filters.dates);
-      if (filters.ordering) params.set('ordering', filters.ordering);
-    } else {
-      if (filters.ordering) params.set('ordering', filters.ordering);
+    // TBA mode: no dates filter — fetchGames drives this with separate requests
+    var tags = filters.tags || [];
+    if (tags.length) params.set('tags', tags.join(','));
+    if (filters.dates && filters.dates !== 'tba') {
+      params.set('dates',   filters.dates);
     }
+    if (filters.ordering) params.set('ordering', filters.ordering);
   }
 
   return params.toString();
@@ -180,7 +176,7 @@ function ChipGroup({ items, selected, onToggle }) {
 }
 
 // ─── Filter panel ─────────────────────────────────────────────
-function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
+function FilterPanel({ filters, onChange, onReset, resultCount, loading, gameCount }) {
   var hasFilters = filters.genres.length > 0 || filters.tags.length > 0 ||
     filters.platforms.length > 0 || filters.dates !== '' ||
     filters.ordering !== '-released';
@@ -197,7 +193,9 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
 
       {/* Result count */}
       <p style={{ margin: 0, fontSize: 11, color: '#6b6b7a' }}>
-        {loading ? 'Loading…' : resultCount.toLocaleString() + ' games'}
+        {loading ? 'Loading…' : filters.dates === 'tba'
+          ? (gameCount > 0 ? gameCount + ' TBA / EA games found' : 'Scanning for TBA & Early Access…')
+          : resultCount.toLocaleString() + ' games'}
       </p>
 
       {/* Release window */}
@@ -223,7 +221,7 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
       <div>
         <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Sort by</p>
         {filters.dates === 'tba' ? (
-          <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Sorted by popularity for TBA games</p>
+          <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Sorted by popularity (fixed for TBA & Early Access)</p>
         ) : (
           <select value={filters.ordering} onChange={function(e) { onChange({ ordering: e.target.value }); }}
             style={{ width: '100%', background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 8, color: '#e8e9f3', padding: '7px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
@@ -347,6 +345,11 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
           ? <img src={game.coverUrl} alt={game.name} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
           : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, background: 'linear-gradient(135deg,#1e1f28,#2a1f4e)' }}>🎮</div>}
 
+        {game.tba && !releaseDate && (
+          <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: '#7c3aed', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
+            TBA
+          </div>
+        )}
         {daysUntil !== null && (
           <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
             {daysUntil <= 0 ? 'OUT NOW' : daysUntil === 1 ? 'TOMORROW' : daysUntil + 'd'}
@@ -469,16 +472,49 @@ export default function App() {
   }
 
   async function fetchGames(f, p, guildId) {
-    var gId = guildId || (currentGuild && currentGuild.id);
+    var gId  = guildId || (currentGuild && currentGuild.id);
+    var isTba = f.dates === 'tba' && !(f.search && f.search.trim().length >= 2);
     setGamesLoading(true);
     try {
-      var qs   = buildRawgQuery(f, p);
-      var data = await apiFetch('GET', '/api/rawg/games?' + qs, null, gId);
-      if (p === 1) { setGames(data.results || []); }
-      else { setGames(function(prev) { return prev.concat(data.results || []); }); }
-      setTotalCount(data.count || 0);
-      setHasMore(!!data.next);
-      setPage(p);
+      if (isTba) {
+        // RAWG has no server-side TBA filter — tba is a response field, not a query param.
+        // Strategy: two parallel requests per page —
+        //   1. Scan the general catalogue client-side for games where tba===true
+        //   2. Fetch games tagged 'early-access' (EA games have a release date, not tba)
+        // Merge and deduplicate so one button covers both groups.
+        var baseF = Object.assign({}, f, { dates: '', ordering: '-added' });
+        var eaTags = (f.tags || []).filter(function(t) { return t !== 'early-access'; }).concat('early-access');
+        var eaF   = Object.assign({}, baseF, { tags: eaTags });
+
+        var results = await Promise.all([
+          apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(baseF, p), null, gId)
+            .catch(function() { return { results: [], next: false }; }),
+          apiFetch('GET', '/api/rawg/games?' + buildRawgQuery(eaF, p), null, gId)
+            .catch(function() { return { results: [], next: false }; }),
+        ]);
+
+        var tbaGames = (results[0].results || []).filter(function(g) { return g.tba === true; });
+        var eaGames  = results[1].results || [];
+
+        // Merge: TBA games first, then EA games, skip duplicates
+        var seen = {};
+        tbaGames.forEach(function(g) { seen[g.rawgId] = true; });
+        var merged = tbaGames.concat(eaGames.filter(function(g) { return !seen[g.rawgId]; }));
+
+        if (p === 1) setGames(merged);
+        else setGames(function(prev) { return prev.concat(merged); });
+        setTotalCount(0);
+        setHasMore(!!results[0].next || !!results[1].next);
+        setPage(p);
+      } else {
+        var qs   = buildRawgQuery(f, p);
+        var data = await apiFetch('GET', '/api/rawg/games?' + qs, null, gId);
+        if (p === 1) setGames(data.results || []);
+        else setGames(function(prev) { return prev.concat(data.results || []); });
+        setTotalCount(data.count || 0);
+        setHasMore(!!data.next);
+        setPage(p);
+      }
     } catch (err) { console.error('Fetch games failed:', err.message); }
     finally { setGamesLoading(false); }
   }
@@ -594,6 +630,7 @@ export default function App() {
           onReset={resetFilters}
           resultCount={totalCount}
           loading={gamesLoading && page === 1}
+          gameCount={games.length}
         />
 
         {/* Main content */}
