@@ -60,6 +60,7 @@ const DATE_PRESETS = [
   { value: new Date().toISOString().slice(0,10) + ',2030-12-31',                  label: 'Upcoming' },
   { value: new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10), label: 'This year' },
   { value: new Date(Date.now()-90*24*60*60*1000).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10),  label: 'Last 3 months' },
+  { value: 'tba',                                                                   label: 'TBA only' },
 ];
 
 const ORDERINGS = [
@@ -99,16 +100,29 @@ function buildRawgQuery(filters, page) {
   var params    = new URLSearchParams();
   var hasSearch = filters.search && filters.search.trim().length >= 2;
   params.set('page', page || 1);
-  if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
-  if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
-  if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
-  if (filters.dates)            params.set('dates',     filters.dates);
-  // When searching, omit ordering so RAWG ranks by relevance
-  if (filters.ordering && !hasSearch) params.set('ordering', filters.ordering);
+
   if (hasSearch) {
+    // When searching by name, drop date/ordering filters so all matching
+    // games are returned regardless of release date or status
     params.set('search',         filters.search.trim());
     params.set('search_precise', 'true');
+    // Still allow genre/tag/platform filters when searching
+    if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
+    if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
+    if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
+  } else {
+    if (filters.genres.length)    params.set('genres',    filters.genres.join(','));
+    if (filters.tags.length)      params.set('tags',      filters.tags.join(','));
+    if (filters.platforms.length) params.set('platforms', filters.platforms.join(','));
+    if (filters.dates === 'tba') {
+      // RAWG tba=true returns only games with no confirmed release date
+      params.set('tba', 'true');
+    } else if (filters.dates) {
+      params.set('dates', filters.dates);
+    }
+    if (filters.ordering)         params.set('ordering',  filters.ordering);
   }
+
   return params.toString();
 }
 
