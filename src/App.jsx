@@ -107,14 +107,11 @@ function buildRawgQuery(filters, page) {
 
   if (hasSearch) {
     params.set('search', filters.search.trim());
-    // Don't use search_precise — it can block TBA/new games with partial index coverage.
-    // Widen to all dates so RAWG includes unreleased games in search results.
+    // No ordering during search — let RAWG rank by relevance (its default when search is set).
+    // Widen to all dates so RAWG includes unreleased/TBA games in search results.
     params.set('dates', '1980-01-01,2099-12-31');
-    // Pass along tag filters during search
+    // Genre/platform/tag filters still apply to narrow the search space
     if (filters.tags && filters.tags.length) params.set('tags', filters.tags.join(','));
-    if (filters.ordering && filters.ordering !== '-released') {
-      params.set('ordering', filters.ordering);
-    }
   } else {
     // TBA mode: no dates filter — fetchGames drives this with separate requests
     var tags = filters.tags || [];
