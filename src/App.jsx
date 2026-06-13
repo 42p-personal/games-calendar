@@ -438,8 +438,20 @@ export default function App() {
   var [addingId,     setAddingId]     = useState(null);
 
   var [filters, setFilters] = useState(function() {
-    try { return Object.assign({}, DEFAULT_FILTERS, JSON.parse(localStorage.getItem(FILTERS_KEY))); }
-    catch (e) { return DEFAULT_FILTERS; }
+    try {
+      var saved = JSON.parse(localStorage.getItem(FILTERS_KEY));
+      if (saved) {
+        // Strip out old RAWG numeric platform IDs — only keep valid Steam platform keys
+        var validPlatforms = ['windows', 'mac', 'linux'];
+        if (Array.isArray(saved.platforms)) {
+          saved.platforms = saved.platforms.filter(function(p) { return validPlatforms.includes(p); });
+        }
+        // Drop any RAWG-only keys that don't belong in the new filter shape
+        var clean = { search: saved.search || '', platforms: saved.platforms || [] };
+        return clean;
+      }
+    } catch (e) { /* fall through */ }
+    return DEFAULT_FILTERS;
   });
 
   var [mobileFilterSheet, setMobileFilterSheet] = useState(false);
