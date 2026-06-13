@@ -589,7 +589,13 @@ export default function App() {
         steamUrl:    game.steamUrl,
       }, currentGuild.id);
       setTrackedGames(function(prev) { return prev.concat(saved); });
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+      if (err.message === 'This game is already being tracked.') {
+        try { setTrackedGames(await apiFetch('GET', '/api/games', null, currentGuild.id)); } catch (e) { /* silent */ }
+      } else {
+        alert(err.message);
+      }
+    }
     finally { setAddingId(null); }
   }
 
