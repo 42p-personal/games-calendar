@@ -6,6 +6,20 @@ const FILTERS_KEY  = 'dc_game_filters';
 const CALENDAR_URL = 'https://calendar.42p.uk';
 const TODAY        = new Date();
 
+// ─── Toast ────────────────────────────────────────────────────
+function Toast({ message, onDone }) {
+  useEffect(function() {
+    var t = setTimeout(onDone, 3200);
+    return function() { clearTimeout(t); };
+  }, []);
+  return (
+    <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 9999, background: '#16a34a', color: '#fff', borderRadius: 10, padding: '11px 20px', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.4)', animation: 'toastIn 0.25s ease', whiteSpace: 'nowrap' }}>
+      <i className="ti ti-calendar-check" style={{ fontSize: 15 }} />
+      {message}
+    </div>
+  );
+}
+
 const PLATFORM_OPTIONS = [
   { id: 'windows', name: 'PC' },
   { id: 'mac',     name: 'Mac' },
@@ -315,7 +329,7 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
             onMouseEnter={function() { setHoverRemove(true); }}
             onMouseLeave={function() { setHoverRemove(false); }}
             style={{ width: '100%', padding: '7px', borderRadius: 8, border: hoverRemove ? '0.5px solid #ff555544' : '0.5px solid #16a34a55', background: hoverRemove ? '#ff000015' : '#16a34a15', color: hoverRemove ? '#ff7070' : '#86efac', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, transition: 'all 0.15s' }}>
-            {hoverRemove ? <><i className="ti ti-x" style={{ fontSize: 12 }} />Remove</> : <><i className="ti ti-check" style={{ fontSize: 12 }} />Added to calendar</>}
+            {hoverRemove ? <><i className="ti ti-x" style={{ fontSize: 12 }} />Remove</> : <><i className="ti ti-calendar-check" style={{ fontSize: 12 }} />In calendar</>}
           </button>
         ) : (
           <button onClick={function() { onAdd(game); }} disabled={isAdding}
@@ -410,7 +424,7 @@ function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
             onMouseEnter={function() { setHoverRemove(true); }}
             onMouseLeave={function() { setHoverRemove(false); }}
             style={{ width: '100%', padding: '6px', borderRadius: 8, border: hoverRemove ? '0.5px solid #ff555544' : '0.5px solid #16a34a55', background: hoverRemove ? '#ff000015' : '#16a34a15', color: hoverRemove ? '#ff7070' : '#86efac', cursor: 'pointer', fontSize: 11, fontWeight: 600, transition: 'all 0.15s' }}>
-            {hoverRemove ? '✕ Remove' : '✓ Added'}
+            {hoverRemove ? '✕ Remove' : '✓ In calendar'}
           </button>
         ) : (
           <button onClick={function() { onAdd(game); }} disabled={isAdding}
@@ -454,6 +468,7 @@ export default function App() {
     return DEFAULT_FILTERS;
   });
 
+  var [toast,             setToast]             = useState(null);
   var [mobileFilterSheet, setMobileFilterSheet] = useState(false);
   var [isMobile, setIsMobile] = useState(function() { return window.innerWidth < 768; });
   var fetchTimeout = useRef(null);
@@ -589,9 +604,14 @@ export default function App() {
         steamUrl:    game.steamUrl,
       }, currentGuild.id);
       setTrackedGames(function(prev) { return prev.concat(saved); });
+      var msg = saved.releaseDate
+        ? game.name + ' added — release date on calendar'
+        : game.name + ' added to calendar';
+      setToast(msg);
     } catch (err) {
       if (err.message === 'This game is already being tracked.') {
         try { setTrackedGames(await apiFetch('GET', '/api/games', null, currentGuild.id)); } catch (e) { /* silent */ }
+        setToast(game.name + ' is already in your calendar');
       } else {
         alert(err.message);
       }
@@ -629,8 +649,10 @@ export default function App() {
         <style>{`
           @keyframes spin { from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
           @keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+          @keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
           .mob-game-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; padding: 0 12px 24px; }
         `}</style>
+        {toast && <Toast message={toast} onDone={function() { setToast(null); }} />}
 
         <header style={{ position: 'sticky', top: 0, zIndex: 100, background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <Logo42p size={28} />
@@ -697,12 +719,14 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', flexDirection: 'column' }}>
       <style>{`
-        @keyframes spin   { from{transform:rotate(0deg);}  to{transform:rotate(360deg);} }
-        @keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+        @keyframes spin    { from{transform:rotate(0deg);}  to{transform:rotate(360deg);} }
+        @keyframes fadeIn  { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+        @keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
         .scroll-thin::-webkit-scrollbar{width:5px;}
         .scroll-thin::-webkit-scrollbar-track{background:#111116;}
         .scroll-thin::-webkit-scrollbar-thumb{background:#2a2b36;border-radius:99px;}
       `}</style>
+      {toast && <Toast message={toast} onDone={function() { setToast(null); }} />}
 
       <header style={{ background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
