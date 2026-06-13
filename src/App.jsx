@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const API_URL      = import.meta.env.VITE_API_URL ?? '';
 const GUILD_KEY    = 'dc_guild';
@@ -6,81 +6,22 @@ const FILTERS_KEY  = 'dc_game_filters';
 const CALENDAR_URL = 'https://calendar.42p.uk';
 const TODAY        = new Date();
 
-// ─── RAWG reference data ──────────────────────────────────────
-
-const GENRES = [
-  { id: 4,   name: 'Action' },
-  { id: 3,   name: 'Adventure' },
-  { id: 5,   name: 'RPG' },
-  { id: 2,   name: 'Shooter' },
-  { id: 10,  name: 'Strategy' },
-  { id: 7,   name: 'Puzzle' },
-  { id: 1,   name: 'Racing' },
-  { id: 15,  name: 'Sports' },
-  { id: 6,   name: 'Fighting' },
-  { id: 14,  name: 'Simulation' },
-  { id: 83,  name: 'Platformer' },
-  { id: 11,  name: 'Arcade' },
-  { id: 40,  name: 'Casual' },
-  { id: 51,  name: 'Indie' },
-  { id: 59,  name: 'MMO' },
+const PLATFORM_OPTIONS = [
+  { id: 'windows', name: 'PC' },
+  { id: 'mac',     name: 'Mac' },
+  { id: 'linux',   name: 'Linux' },
 ];
 
-const TAGS = [
-  { id: 7,              name: 'Multiplayer' },
-  { id: 31,             name: 'Singleplayer' },
-  { id: 8,              name: 'Online' },
-  { id: 799,            name: 'Survival' },
-  { id: 13,             name: 'Atmospheric' },
-  { id: 42,             name: 'Open World' },
-  { id: 24,             name: 'Story Rich' },
-  { id: 4,              name: 'Horror' },
-  { id: 198,            name: 'Co-op' },
-  { id: 397,            name: 'Roguelike' },
-  { id: 121,            name: 'Sandbox' },
-  { id: 149,            name: 'First-Person' },
-  { id: 4026,           name: 'Third Person' },
-  { id: 693,            name: 'Stealth' },
-  { id: 75,             name: '2D' },
-  { id: 79,             name: '3D' },
-  { id: 'early-access', name: 'Early Access' },
-];
-
-const PLATFORMS = [
-  { id: 4,   name: 'PC' },
-  { id: 187, name: 'PS5' },
-  { id: 18,  name: 'PS4' },
-  { id: 186, name: 'Xbox Series X' },
-  { id: 1,   name: 'Xbox One' },
-  { id: 7,   name: 'Switch' },
-  { id: 3,   name: 'iOS' },
-  { id: 21,  name: 'Android' },
-];
-
-const DATE_PRESETS = [
-  { value: '',                                                                      label: 'All time' },
-  { value: new Date().toISOString().slice(0,10) + ',2099-12-31',                  label: 'Upcoming' },
-  { value: new Date(new Date().getFullYear(),0,1).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10), label: 'This year' },
-  { value: new Date(Date.now()-90*24*60*60*1000).toISOString().slice(0,10) + ',' + new Date().toISOString().slice(0,10),  label: 'Last 3 months' },
-  { value: 'tba',                                                                   label: 'TBA / Early Access' },
-];
-
-const ORDERINGS = [
-  { value: '-released',      label: 'Release date (newest)' },
-  { value: 'released',       label: 'Release date (oldest)' },
-  { value: '-rating',        label: 'Rating' },
-  { value: '-added',         label: 'Popularity' },
-  { value: 'name',           label: 'Name A–Z' },
-  { value: '-metacritic',    label: 'Metacritic' },
+const TYPE_OPTIONS = [
+  { value: 'all',          label: 'All games' },
+  { value: 'coming_soon',  label: 'Coming soon' },
+  { value: 'early_access', label: 'Early Access' },
 ];
 
 const DEFAULT_FILTERS = {
-  genres:    [],
-  tags:      [],
-  platforms: [],
-  dates:     '',
-  ordering:  '-released',
   search:    '',
+  platforms: [],
+  type:      'all',
 };
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -90,42 +31,55 @@ async function apiFetch(method, path, body, guildId) {
   if (body)    headers['Content-Type'] = 'application/json';
   if (guildId) headers['X-Guild-ID']   = guildId;
   var res = await fetch(API_URL + path, {
-    method: method, credentials: 'include', headers: headers,
-    body:   body ? JSON.stringify(body) : undefined,
+    method, credentials: 'include', headers,
+    body: body ? JSON.stringify(body) : undefined,
   });
   var data = await res.json().catch(function() { return {}; });
   if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
   return data;
 }
 
-function buildRawgQuery(filters, page) {
-  var params    = new URLSearchParams();
-  var hasSearch = filters.search && filters.search.trim().length >= 2;
-  params.set('page', page || 1);
+function parseReleaseDate(str) {
+  if (!str) return null;
+  var d = new Date(str);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
 
-  var genres    = filters.genres    || [];
-  var platforms = filters.platforms || [];
-  var tags      = filters.tags      || [];
+function normalizeSteamApp(appid, data, meta) {
+  var plats = data.platforms || {};
+  var platformStr = [
+    plats.windows && 'PC',
+    plats.mac     && 'Mac',
+    plats.linux   && 'Linux',
+  ].filter(Boolean).join(' · ');
 
-  if (genres.length)    params.set('genres',    genres.join(','));
-  if (platforms.length) params.set('platforms', platforms.join(','));
+  var comingSoon  = !!(data.release_date && data.release_date.coming_soon);
+  var releaseDate = comingSoon ? null : parseReleaseDate(data.release_date && data.release_date.date);
 
-  if (hasSearch) {
-    params.set('search', filters.search.trim());
-    params.set('dates', '1980-01-01,2099-12-31');
-    if (tags.length) params.set('tags', tags.join(','));
-  } else if (filters.tba) {
-    // Use RAWG's server-side tba filter — much more accurate than client-side filtering
-    params.set('tba', 'true');
-    params.set('ordering', '-added');
-    if (tags.length) params.set('tags', tags.join(','));
-  } else {
-    if (tags.length) params.set('tags', tags.join(','));
-    if (filters.dates && filters.dates !== 'tba') params.set('dates', filters.dates);
-    if (filters.ordering) params.set('ordering', filters.ordering);
-  }
+  // Steam genre id 70 = Early Access
+  var isEarlyAccess = (data.genres || []).some(function(g) { return g.id === '70'; });
+  var genres = (data.genres || [])
+    .filter(function(g) { return g.id !== '70'; })
+    .map(function(g) { return g.description; })
+    .join(', ');
 
-  return params.toString();
+  var price = '';
+  if (data.is_free) price = 'Free';
+  else if (data.price_overview) price = data.price_overview.final_formatted;
+
+  return {
+    steamId:       String(appid),
+    name:          data.name || '',
+    coverUrl:      data.header_image || null,
+    releaseDate,
+    comingSoon,
+    isEarlyAccess,
+    genres,
+    platforms:     platformStr,
+    price,
+    metascore:     (meta && meta.metascore) || null,
+    steamUrl:      'https://store.steampowered.com/app/' + appid,
+  };
 }
 
 function toggleItem(arr, id) {
@@ -176,10 +130,8 @@ function ChipGroup({ items, selected, onToggle }) {
 }
 
 // ─── Filter panel ─────────────────────────────────────────────
-function FilterPanel({ filters, onChange, onReset, resultCount, loading, gameCount }) {
-  var hasFilters = filters.genres.length > 0 || filters.tags.length > 0 ||
-    filters.platforms.length > 0 || filters.dates !== '' ||
-    filters.ordering !== '-released';
+function FilterPanel({ filters, onChange, onReset, resultCount, loading }) {
+  var hasFilters = filters.platforms.length > 0 || filters.type !== 'all';
 
   return (
     <aside style={{ width: 220, flexShrink: 0, background: '#111116', borderRight: '0.5px solid #2a2b36', overflowY: 'auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 18 }} className="scroll-thin">
@@ -191,69 +143,38 @@ function FilterPanel({ filters, onChange, onReset, resultCount, loading, gameCou
         )}
       </div>
 
-      {/* Result count */}
       <p style={{ margin: 0, fontSize: 11, color: '#6b6b7a' }}>
-        {loading ? 'Loading…' : filters.dates === 'tba'
-          ? (gameCount > 0 ? gameCount + ' TBA / EA games found' : 'Scanning TBA & Early Access…')
-          : resultCount.toLocaleString() + ' games'}
+        {loading ? 'Loading…' : resultCount.toLocaleString() + ' games'}
       </p>
 
-      {/* Release window */}
+      {/* Type */}
       <div>
-        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Release window</p>
-        {filters.search && filters.search.trim().length >= 2 && (
-          <p style={{ margin: '0 0 6px', fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Ignored during search</p>
-        )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, opacity: (filters.search && filters.search.trim().length >= 2) ? 0.4 : 1, transition: 'opacity 0.15s' }}>
-          {DATE_PRESETS.map(function(p) {
-            var active = filters.dates === p.value;
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Type</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {TYPE_OPTIONS.map(function(opt) {
+            var active = filters.type === opt.value;
             return (
-              <button key={p.value} onClick={function() { onChange({ dates: p.value }); }}
+              <button key={opt.value} onClick={function() { onChange({ type: opt.value }); }}
                 style={{ padding: '6px 10px', borderRadius: 7, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f122' : 'transparent', color: active ? '#a5b4fc' : '#8b8ca8', fontSize: 12, fontWeight: active ? 600 : 400, cursor: 'pointer', textAlign: 'left', transition: 'all 0.12s' }}>
-                {p.label}
+                {opt.label}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Sort */}
-      <div>
-        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Sort by</p>
-        {filters.dates === 'tba' ? (
-          <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Sorted by popularity (fixed for TBA & upcoming)</p>
-        ) : (
-          <select value={filters.ordering} onChange={function(e) { onChange({ ordering: e.target.value }); }}
-            style={{ width: '100%', background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 8, color: '#e8e9f3', padding: '7px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
-            {ORDERINGS.map(function(o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
-          </select>
-        )}
-      </div>
-
-      {/* Genres */}
-      <div>
-        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-          Genres {filters.genres.length > 0 && <span style={{ color: '#6366f1' }}>({filters.genres.length})</span>}
-        </p>
-        <ChipGroup items={GENRES} selected={filters.genres} onToggle={function(id) { onChange({ genres: toggleItem(filters.genres, id) }); }} />
-      </div>
-
-      {/* Tags */}
-      <div>
-        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-          Tags {filters.tags.length > 0 && <span style={{ color: '#6366f1' }}>({filters.tags.length})</span>}
-        </p>
-        <ChipGroup items={TAGS} selected={filters.tags} onToggle={function(id) { onChange({ tags: toggleItem(filters.tags, id) }); }} />
-      </div>
-
       {/* Platforms */}
       <div>
         <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-          Platforms {filters.platforms.length > 0 && <span style={{ color: '#6366f1' }}>({filters.platforms.length})</span>}
+          Platform {filters.platforms.length > 0 && <span style={{ color: '#6366f1' }}>({filters.platforms.length})</span>}
         </p>
-        <ChipGroup items={PLATFORMS} selected={filters.platforms} onToggle={function(id) { onChange({ platforms: toggleItem(filters.platforms, id) }); }} />
+        <ChipGroup items={PLATFORM_OPTIONS} selected={filters.platforms} onToggle={function(id) { onChange({ platforms: toggleItem(filters.platforms, id) }); }} />
       </div>
 
+      {/* Steam link */}
+      <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '0.5px solid #1e1f28' }}>
+        <p style={{ margin: 0, fontSize: 10, color: '#3a3a52' }}>Powered by Steam</p>
+      </div>
     </aside>
   );
 }
@@ -329,9 +250,18 @@ function GuildPicker({ guilds, loading, error, onSelect }) {
 
 // ─── Game card ────────────────────────────────────────────────
 function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
-  var releaseDate = game.releaseDate ? new Date(game.releaseDate) : null;
-  var daysUntil   = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
+  var releaseDate  = game.releaseDate ? new Date(game.releaseDate) : null;
+  var daysUntil    = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
   var [hoverRemove, setHoverRemove] = useState(false);
+
+  var badgeLabel = null;
+  var badgeBg    = '#6366f1';
+  if (game.isEarlyAccess) { badgeLabel = 'Early Access'; badgeBg = '#0369a1'; }
+  else if (game.comingSoon && !releaseDate) { badgeLabel = 'TBA'; badgeBg = '#7c3aed'; }
+  else if (daysUntil !== null) {
+    badgeLabel = daysUntil <= 0 ? 'OUT NOW' : daysUntil === 1 ? 'TOMORROW' : daysUntil + 'd';
+    badgeBg    = daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1';
+  }
 
   return (
     <div style={{ background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: 'transform 0.15s, border-color 0.15s', animation: 'fadeIn 0.3s ease' }}
@@ -339,30 +269,25 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
       onMouseLeave={function(e) { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#2a2b36'; }}>
 
       {/* Cover */}
-      <div style={{ position: 'relative', paddingTop: '56.25%', background: '#111116', overflow: 'hidden' }}>
+      <div style={{ position: 'relative', paddingTop: '47%', background: '#111116', overflow: 'hidden' }}>
         {game.coverUrl
           ? <img src={game.coverUrl} alt={game.name} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
           : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, background: 'linear-gradient(135deg,#1e1f28,#2a1f4e)' }}>🎮</div>}
 
-        {game.tba && !releaseDate && (
-          <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: '#7c3aed', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
-            TBA
-          </div>
-        )}
-        {daysUntil !== null && (
-          <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
-            {daysUntil <= 0 ? 'OUT NOW' : daysUntil === 1 ? 'TOMORROW' : daysUntil + 'd'}
+        {badgeLabel && (
+          <div style={{ position: 'absolute', top: 8, right: 8, borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: '#fff', background: badgeBg, boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
+            {badgeLabel}
           </div>
         )}
 
-        {game.rating > 0 && (
+        {game.metascore && (
           <div style={{ position: 'absolute', top: 8, left: 8, borderRadius: 6, padding: '3px 7px', fontSize: 10, fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', gap: 3 }}>
-            ★ {game.rating.toFixed(1)}
+            MC {game.metascore}
           </div>
         )}
 
-        <a href={'https://rawg.io/games/' + game.slug} target="_blank" rel="noopener noreferrer"
-          title="View on RAWG" onClick={function(e) { e.stopPropagation(); }}
+        <a href={game.steamUrl} target="_blank" rel="noopener noreferrer"
+          title="View on Steam" onClick={function(e) { e.stopPropagation(); }}
           style={{ position: 'absolute', bottom: 8, right: 8, width: 26, height: 26, borderRadius: 6, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, textDecoration: 'none' }}>
           🔗
         </a>
@@ -372,10 +297,15 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
       <div style={{ padding: '12px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
         <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#e8e9f3', lineHeight: 1.3 }}>{game.name}</p>
         <p style={{ margin: 0, fontSize: 12, color: releaseDate ? '#a78bfa' : '#6b6b7a', fontWeight: releaseDate ? 600 : 400 }}>
-          {releaseDate ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : 'TBC'}
+          {releaseDate
+            ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+            : (game.comingSoon ? 'Coming soon' : 'TBC')}
         </p>
         {game.genres && <p style={{ margin: 0, fontSize: 11, color: '#52536a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{game.genres}</p>}
-        {game.platforms && <p style={{ margin: 0, fontSize: 10, color: '#3a3a52', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{game.platforms}</p>}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
+          {game.platforms && <p style={{ margin: 0, fontSize: 10, color: '#3a3a52' }}>{game.platforms}</p>}
+          {game.price && <p style={{ margin: 0, fontSize: 11, color: '#6b6b7a', fontWeight: 600 }}>{game.price}</p>}
+        </div>
       </div>
 
       {/* Action */}
@@ -402,18 +332,17 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
 }
 
 // ─── Mobile filter sheet ─────────────────────────────────────
-function MobileFilterSheet({ filters, onChange, onReset, onClose, resultCount, loading, gameCount }) {
-  var hasFilters = filters.genres.length > 0 || filters.tags.length > 0 ||
-    filters.platforms.length > 0 || filters.dates !== '' || filters.ordering !== '-released';
+function MobileFilterSheet({ filters, onChange, onReset, onClose, resultCount, loading }) {
+  var hasFilters = filters.platforms.length > 0 || filters.type !== 'all';
 
   var S = {
-    overlay:  { position: 'fixed', inset: 0, zIndex: 800, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' },
-    sheet:    { position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 900, background: '#111116', borderRadius: '20px 20px 0 0', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 -8px 40px rgba(0,0,0,0.5)' },
-    pill:     { width: 36, height: 4, borderRadius: 99, background: '#2a2b36', margin: '12px auto 0' },
-    hdr:      { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px 10px' },
-    body:     { overflowY: 'auto', padding: '0 18px 24px', display: 'flex', flexDirection: 'column', gap: 20 },
-    label:    { margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' },
-    done:     { margin: '8px 18px 16px', height: 48, borderRadius: 14, background: '#6366f1', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer' },
+    overlay: { position: 'fixed', inset: 0, zIndex: 800, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' },
+    sheet:   { position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 900, background: '#111116', borderRadius: '20px 20px 0 0', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 -8px 40px rgba(0,0,0,0.5)' },
+    pill:    { width: 36, height: 4, borderRadius: 99, background: '#2a2b36', margin: '12px auto 0' },
+    hdr:     { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px 10px' },
+    body:    { overflowY: 'auto', padding: '0 18px 24px', display: 'flex', flexDirection: 'column', gap: 20 },
+    label:   { margin: '0 0 8px', fontSize: 11, fontWeight: 600, color: '#6b6b7a', textTransform: 'uppercase', letterSpacing: '0.07em' },
+    done:    { margin: '8px 18px 16px', height: 48, borderRadius: 14, background: '#6366f1', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer' },
   };
 
   return (
@@ -425,65 +354,33 @@ function MobileFilterSheet({ filters, onChange, onReset, onClose, resultCount, l
           <span style={{ fontWeight: 700, fontSize: 16, color: '#e8e9f3' }}>Filters</span>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#52536a' }}>
-              {loading ? 'Loading…' : filters.dates === 'tba' ? gameCount + ' found' : resultCount.toLocaleString() + ' games'}
+              {loading ? 'Loading…' : resultCount.toLocaleString() + ' games'}
             </span>
             {hasFilters && <button onClick={onReset} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: 12, cursor: 'pointer', padding: 0, fontWeight: 600 }}>Reset</button>}
           </div>
         </div>
 
         <div style={S.body}>
-          {/* Release window */}
+          {/* Type */}
           <div>
-            <p style={S.label}>Release window</p>
+            <p style={S.label}>Type</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {DATE_PRESETS.map(function(p) {
-                var active = filters.dates === p.value;
+              {TYPE_OPTIONS.map(function(opt) {
+                var active = filters.type === opt.value;
                 return (
-                  <button key={p.value} onClick={function() { onChange({ dates: p.value }); }}
+                  <button key={opt.value} onClick={function() { onChange({ type: opt.value }); }}
                     style={{ padding: '6px 12px', borderRadius: 99, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 12, fontWeight: active ? 700 : 400, cursor: 'pointer' }}>
-                    {p.label}
+                    {opt.label}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* Sort */}
-          <div>
-            <p style={S.label}>Sort by</p>
-            {filters.dates === 'tba' ? (
-              <p style={{ margin: 0, fontSize: 11, color: '#52536a', fontStyle: 'italic' }}>Fixed for TBA & EA</p>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {ORDERINGS.map(function(o) {
-                  var active = filters.ordering === o.value;
-                  return (
-                    <button key={o.value} onClick={function() { onChange({ ordering: o.value }); }}
-                      style={{ padding: '6px 12px', borderRadius: 99, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 12, fontWeight: active ? 700 : 400, cursor: 'pointer' }}>
-                      {o.label}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Genres */}
-          <div>
-            <p style={S.label}>Genres {filters.genres.length > 0 && <span style={{ color: '#6366f1' }}>({filters.genres.length})</span>}</p>
-            <ChipGroup items={GENRES} selected={filters.genres} onToggle={function(id) { onChange({ genres: toggleItem(filters.genres, id) }); }} />
-          </div>
-
-          {/* Tags */}
-          <div>
-            <p style={S.label}>Tags {filters.tags.length > 0 && <span style={{ color: '#6366f1' }}>({filters.tags.length})</span>}</p>
-            <ChipGroup items={TAGS} selected={filters.tags} onToggle={function(id) { onChange({ tags: toggleItem(filters.tags, id) }); }} />
-          </div>
-
           {/* Platforms */}
           <div>
-            <p style={S.label}>Platforms {filters.platforms.length > 0 && <span style={{ color: '#6366f1' }}>({filters.platforms.length})</span>}</p>
-            <ChipGroup items={PLATFORMS} selected={filters.platforms} onToggle={function(id) { onChange({ platforms: toggleItem(filters.platforms, id) }); }} />
+            <p style={S.label}>Platform {filters.platforms.length > 0 && <span style={{ color: '#6366f1' }}>({filters.platforms.length})</span>}</p>
+            <ChipGroup items={PLATFORM_OPTIONS} selected={filters.platforms} onToggle={function(id) { onChange({ platforms: toggleItem(filters.platforms, id) }); }} />
           </div>
         </div>
 
@@ -499,38 +396,41 @@ function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
   var daysUntil   = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
   var [hoverRemove, setHoverRemove] = useState(false);
 
-  var badge = game.tba && !releaseDate ? { label: 'TBA', bg: '#7c3aed' }
-    : daysUntil !== null ? { label: daysUntil <= 0 ? 'OUT' : daysUntil === 1 ? 'TMW' : daysUntil + 'd', bg: daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1' }
-    : null;
+  var badgeLabel = null;
+  var badgeBg    = '#6366f1';
+  if (game.isEarlyAccess) { badgeLabel = 'EA'; badgeBg = '#0369a1'; }
+  else if (game.comingSoon && !releaseDate) { badgeLabel = 'TBA'; badgeBg = '#7c3aed'; }
+  else if (daysUntil !== null) {
+    badgeLabel = daysUntil <= 0 ? 'OUT' : daysUntil === 1 ? 'TMW' : daysUntil + 'd';
+    badgeBg    = daysUntil <= 0 ? '#16a34a' : daysUntil <= 7 ? '#ef4444' : daysUntil <= 30 ? '#f97316' : '#6366f1';
+  }
 
   return (
     <div style={{ background: '#1a1b22', border: '0.5px solid #2a2b36', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      {/* Cover */}
-      <div style={{ position: 'relative', paddingTop: '56%', background: '#111116' }}>
+      <div style={{ position: 'relative', paddingTop: '47%', background: '#111116' }}>
         {game.coverUrl
           ? <img src={game.coverUrl} alt={game.name} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
           : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, background: 'linear-gradient(135deg,#1e1f28,#2a1f4e)' }}>🎮</div>}
-        {badge && (
-          <div style={{ position: 'absolute', top: 6, right: 6, borderRadius: 6, padding: '3px 7px', fontSize: 10, fontWeight: 700, color: '#fff', background: badge.bg }}>
-            {badge.label}
+        {badgeLabel && (
+          <div style={{ position: 'absolute', top: 6, right: 6, borderRadius: 6, padding: '3px 7px', fontSize: 10, fontWeight: 700, color: '#fff', background: badgeBg }}>
+            {badgeLabel}
           </div>
         )}
-        {game.rating > 0 && (
+        {game.metascore && (
           <div style={{ position: 'absolute', top: 6, left: 6, borderRadius: 5, padding: '2px 6px', fontSize: 10, fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,0.75)' }}>
-            ★ {game.rating.toFixed(1)}
+            MC {game.metascore}
           </div>
         )}
       </div>
 
-      {/* Info */}
       <div style={{ padding: '10px 10px 4px', flex: 1 }}>
         <p style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#e8e9f3', lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{game.name}</p>
         <p style={{ margin: '3px 0 0', fontSize: 10, color: releaseDate ? '#a78bfa' : '#52536a', fontWeight: releaseDate ? 600 : 400 }}>
-          {releaseDate ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBC'}
+          {releaseDate ? releaseDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : (game.comingSoon ? 'Coming soon' : 'TBC')}
         </p>
+        {game.price && <p style={{ margin: '2px 0 0', fontSize: 10, color: '#6b6b7a' }}>{game.price}</p>}
       </div>
 
-      {/* Action */}
       <div style={{ padding: '6px 10px 10px' }}>
         {isAdded ? (
           <button
@@ -564,8 +464,6 @@ export default function App() {
   var [trackedGames,  setTrackedGames]  = useState([]);
   var [gamesLoading,  setGamesLoading]  = useState(false);
   var [totalCount,    setTotalCount]    = useState(0);
-  var [hasMore,       setHasMore]       = useState(false);
-  var [page,          setPage]          = useState(1);
   var [addingId,      setAddingId]      = useState(null);
 
   var [filters, setFilters] = useState(function() {
@@ -592,13 +490,13 @@ export default function App() {
         setUser(u);
         var saved = null;
         try { saved = JSON.parse(localStorage.getItem(GUILD_KEY)); } catch (e) {}
-        if (saved) { loadGamesForGuild(saved); }
-        else { loadGuilds(); }
+        if (saved) loadGamesForGuild(saved);
+        else loadGuilds();
       })
       .catch(function() { setScreen('auth'); });
   }, []);
 
-  // Auto-refresh tracked games list every 60 seconds (picks up other users' additions)
+  // Auto-refresh tracked games list every 60 seconds
   useEffect(function() {
     if (screen !== 'games' || !currentGuild) return;
     var gId = currentGuild.id;
@@ -620,13 +518,13 @@ export default function App() {
     };
   }, [screen, currentGuild]);
 
-  // Refetch when filters change — debounce search input, instant for other filter changes
+  // Refetch when filters change — debounce search, instant for other changes
   useEffect(function() {
     if (screen !== 'games' || !currentGuild) return;
     localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
     clearTimeout(fetchTimeout.current);
-    var delay = (filters.search !== undefined && filters.search.length > 0) ? 600 : 0;
-    fetchTimeout.current = setTimeout(function() { fetchGames(filters, 1); }, delay);
+    var delay = (filters.search && filters.search.length > 0) ? 600 : 0;
+    fetchTimeout.current = setTimeout(function() { fetchGames(filters); }, delay);
   }, [filters, screen]);
 
   async function loadGuilds() {
@@ -645,69 +543,75 @@ export default function App() {
       var tracked = await apiFetch('GET', '/api/games', null, guild.id);
       setTrackedGames(tracked);
     } catch (err) { console.error('Failed to load tracked games:', err.message); }
-    await fetchGames(filters, 1, guild.id);
+    await fetchGames(filters, guild.id);
     setGamesLoading(false);
   }
 
-  async function fetchGames(f, p, guildId) {
-    var gId  = guildId || (currentGuild && currentGuild.id);
-    var isTba = f.dates === 'tba' && !(f.search && f.search.trim().length >= 2);
+  async function fetchGames(f, guildOverride) {
+    var gId = guildOverride || (currentGuild && currentGuild.id);
     setGamesLoading(true);
     try {
-      if (isTba) {
-        // Three queries cover all TBA/Early Access categories:
-        //   1. TBA — no date announced (server-side ?tba=true filter)
-        //   2. Upcoming — future release date (entering EA soon, or full release)
-        //   3. Currently in Early Access — released in the past but tagged early-access
-        var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-        var base     = { genres: f.genres, platforms: f.platforms, tags: f.tags || [], search: '' };
-        // For the EA query, always include the early-access tag on top of the user's tags
-        var eaTags   = (f.tags || []).includes('early-access')
-          ? (f.tags || [])
-          : (f.tags || []).concat(['early-access']);
+      var rawItems = [];
+      var metaMap  = {};
 
-        var tbaQ  = buildRawgQuery(Object.assign({}, base, { tba: true }), p);
-        var upQ   = buildRawgQuery(Object.assign({}, base, { dates: tomorrow + ',2099-12-31', ordering: '-added' }), p);
-        var eaQ   = buildRawgQuery(Object.assign({}, base, { tags: eaTags, dates: tomorrow + ',2099-12-31', ordering: '-added' }), p);
-
-        var results = await Promise.all([
-          apiFetch('GET', '/api/rawg/games?' + tbaQ,  null, gId).catch(function() { return { results: [], next: false }; }),
-          apiFetch('GET', '/api/rawg/games?' + upQ,   null, gId).catch(function() { return { results: [], next: false }; }),
-          apiFetch('GET', '/api/rawg/games?' + eaQ,   null, gId).catch(function() { return { results: [], next: false }; }),
-        ]);
-
-        // Merge: TBA first, then upcoming, then current EA — deduplicate by rawgId
-        var seen   = {};
-        var merged = [];
-        [results[0].results || [], results[1].results || [], results[2].results || []].forEach(function(chunk) {
-          chunk.forEach(function(g) {
-            if (!seen[g.rawgId]) { seen[g.rawgId] = true; merged.push(g); }
-          });
+      if (f.search && f.search.trim().length >= 2) {
+        // Search via Steam storesearch
+        var searchData = await apiFetch('GET', '/api/steam/search?term=' + encodeURIComponent(f.search.trim()), null, gId);
+        var items = (searchData.items || []).filter(function(i) { return i.type === 'app'; });
+        items.forEach(function(item) {
+          rawItems.push(String(item.id));
+          metaMap[String(item.id)] = item;
         });
-
-        if (p === 1) {
-          setGames(merged);
-        } else {
-          setGames(function(prev) {
-            var prevIds = {};
-            prev.forEach(function(g) { prevIds[g.rawgId] = true; });
-            return prev.concat(merged.filter(function(g) { return !prevIds[g.rawgId]; }));
-          });
-        }
-        setTotalCount(0);
-        setHasMore(results[0].next || results[1].next || results[2].next);
-        setPage(p);
       } else {
-        var qs   = buildRawgQuery(f, p);
-        var data = await apiFetch('GET', '/api/rawg/games?' + qs, null, gId);
-        if (p === 1) setGames(data.results || []);
-        else setGames(function(prev) { return prev.concat(data.results || []); });
-        setTotalCount(data.count || 0);
-        setHasMore(!!data.next);
-        setPage(p);
+        // Default: Steam featured coming soon
+        var featured = await apiFetch('GET', '/api/steam/featured', null, gId);
+        var csItems = ((featured.coming_soon && featured.coming_soon.items) || []).slice(0, 24);
+        csItems.forEach(function(item) {
+          rawItems.push(String(item.id));
+          metaMap[String(item.id)] = {
+            metascore: null,
+            platforms: { windows: item.windows_available, mac: item.mac_available, linux: item.linux_available },
+          };
+        });
       }
-    } catch (err) { console.error('Fetch games failed:', err.message); }
-    finally { setGamesLoading(false); }
+
+      if (!rawItems.length) {
+        setGames([]); setTotalCount(0); setGamesLoading(false); return;
+      }
+
+      // Batch appdetails for full game info
+      var detailsMap = await apiFetch('GET', '/api/steam/details?appids=' + rawItems.join(','), null, gId);
+
+      var games = [];
+      rawItems.forEach(function(id) {
+        var entry = detailsMap[id];
+        if (!entry || !entry.success || !entry.data) return;
+        var data = entry.data;
+        // Skip non-games (DLC, soundtracks, etc.)
+        if (data.type && data.type !== 'game') return;
+
+        var game = normalizeSteamApp(id, data, metaMap[id]);
+
+        // Apply type filter
+        if (f.type === 'coming_soon'  && !game.comingSoon)  return;
+        if (f.type === 'early_access' && !game.isEarlyAccess) return;
+
+        // Apply platform filter
+        if (f.platforms.length) {
+          var plats = data.platforms || {};
+          if (!f.platforms.some(function(p) { return plats[p]; })) return;
+        }
+
+        games.push(game);
+      });
+
+      setGames(games);
+      setTotalCount(games.length);
+    } catch (err) {
+      console.error('fetchGames failed:', err.message);
+    } finally {
+      setGamesLoading(false);
+    }
   }
 
   function updateFilters(patch) {
@@ -725,18 +629,15 @@ export default function App() {
   }
 
   async function handleAdd(game) {
-    setAddingId(game.rawgId);
+    setAddingId(game.steamId);
     try {
-      // Fetch Steam URL from RAWG stores endpoint (best-effort — null if unavailable)
-      var steamUrl = null;
-      try {
-        var storesData = await apiFetch('GET', '/api/rawg/games/' + game.rawgId + '/stores', null, currentGuild.id);
-        steamUrl = storesData.steamUrl || null;
-      } catch (e) { /* non-fatal */ }
-
       var saved = await apiFetch('POST', '/api/games', {
-        rawgId: game.rawgId, name: game.name, releaseDate: game.releaseDate,
-        coverUrl: game.coverUrl, platforms: game.platforms, steamUrl: steamUrl,
+        rawgId:      game.steamId,
+        name:        game.name,
+        releaseDate: game.releaseDate,
+        coverUrl:    game.coverUrl,
+        platforms:   game.platforms,
+        steamUrl:    game.steamUrl,
       }, currentGuild.id);
       setTrackedGames(function(prev) { return prev.concat(saved); });
     } catch (err) { alert(err.message); }
@@ -744,7 +645,7 @@ export default function App() {
   }
 
   async function handleRemove(game) {
-    var tracked = trackedGames.find(function(g) { return g.rawgId === game.rawgId; });
+    var tracked = trackedGames.find(function(g) { return g.rawgId === game.steamId; });
     if (!tracked) return;
     try {
       await apiFetch('DELETE', '/api/games/' + tracked.id, null, currentGuild.id);
@@ -752,7 +653,7 @@ export default function App() {
     } catch (err) { alert(err.message); }
   }
 
-  function isTracked(rawgId) { return trackedGames.some(function(g) { return g.rawgId === rawgId; }); }
+  function isTracked(steamId) { return trackedGames.some(function(g) { return g.rawgId === steamId; }); }
 
   // ── Screens ───────────────────────────────────────────────
   if (screen === 'loading') return (
@@ -764,7 +665,7 @@ export default function App() {
   if (screen === 'auth')       return <AuthScreen />;
   if (screen === 'guild-pick') return <GuildPicker guilds={guilds} loading={guildsLoading} error={guildsError} onSelect={handleGuildSelect} />;
 
-  var activeFilterCount = filters.genres.length + filters.tags.length + filters.platforms.length + (filters.dates ? 1 : 0) + (filters.ordering !== '-released' ? 1 : 0);
+  var activeFilterCount = filters.platforms.length + (filters.type !== 'all' ? 1 : 0);
 
   // ── Mobile layout ─────────────────────────────────────────
   if (isMobile) {
@@ -776,7 +677,6 @@ export default function App() {
           .mob-game-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; padding: 0 12px 24px; }
         `}</style>
 
-        {/* Sticky header */}
         <header style={{ position: 'sticky', top: 0, zIndex: 100, background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <Logo42p size={28} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -798,7 +698,7 @@ export default function App() {
           <input
             value={filters.search}
             onChange={function(e) { updateFilters({ search: e.target.value }); }}
-            placeholder="Search games…"
+            placeholder="Search Steam…"
             style={{ width: '100%', boxSizing: 'border-box', background: '#1a1b22', border: '0.5px solid #3a3a42', borderRadius: 12, color: '#e8e9f3', padding: '11px 36px 11px 40px', fontSize: 14, outline: 'none' }}
           />
           {filters.search && (
@@ -807,14 +707,14 @@ export default function App() {
           )}
         </div>
 
-        {/* Quick date chip strip */}
+        {/* Quick type chip strip */}
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '4px 12px 10px', scrollbarWidth: 'none' }}>
-          {DATE_PRESETS.map(function(p) {
-            var active = filters.dates === p.value;
+          {TYPE_OPTIONS.map(function(opt) {
+            var active = filters.type === opt.value;
             return (
-              <button key={p.value} onClick={function() { updateFilters({ dates: p.value }); }}
+              <button key={opt.value} onClick={function() { updateFilters({ type: opt.value }); }}
                 style={{ flex: 'none', padding: '5px 12px', borderRadius: 99, border: active ? '0.5px solid #6366f1' : '0.5px solid #2a2b36', background: active ? '#6366f1' : '#1a1b22', color: active ? '#fff' : '#8b8ca8', fontSize: 11, fontWeight: active ? 700 : 400, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                {p.label}
+                {opt.label}
               </button>
             );
           })}
@@ -822,49 +722,38 @@ export default function App() {
 
         {/* Result count */}
         <div style={{ padding: '0 14px 8px', fontSize: 11, color: '#52536a' }}>
-          {gamesLoading && page === 1 ? 'Loading…'
-            : filters.dates === 'tba' ? (games.length > 0 ? games.length + ' TBA / EA games' : 'Scanning…')
-            : totalCount.toLocaleString() + ' games'}
+          {gamesLoading ? 'Loading…' : totalCount.toLocaleString() + ' games'}
         </div>
 
         {/* Games grid */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          {gamesLoading && page === 1 ? (
+          {gamesLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 10, color: '#8b8ca8' }}>
               <i className="ti ti-loader" style={{ fontSize: 24, animation: 'spin 1s linear infinite', color: '#6366f1' }} /> Loading…
             </div>
           ) : games.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '50px 20px', color: '#6b6b7a' }}>
               <p style={{ fontSize: 36, margin: '0 0 10px' }}>🎮</p>
-              <p style={{ fontSize: 15, color: '#8b8ca8', margin: '0 0 6px' }}>No games found</p>
-              <p style={{ fontSize: 12 }}>Try adjusting the filters or search.</p>
+              <p style={{ fontSize: 15, color: '#8b8ca8', margin: '0 0 6px' }}>
+                {filters.search ? 'No results for "' + filters.search + '"' : 'No games found'}
+              </p>
+              <p style={{ fontSize: 12 }}>{filters.search ? 'Try a different search term.' : 'Try adjusting the filters.'}</p>
               {activeFilterCount > 0 && <button onClick={resetFilters} style={{ marginTop: 12, padding: '8px 18px', borderRadius: 9, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Reset filters</button>}
             </div>
           ) : (
-            <>
-              <div className="mob-game-grid">
-                {games.map(function(game) {
-                  return (
-                    <MobileGameCard key={game.rawgId} game={game}
-                      isAdded={isTracked(game.rawgId)}
-                      isAdding={addingId === game.rawgId}
-                      onAdd={handleAdd} onRemove={handleRemove} />
-                  );
-                })}
-              </div>
-              {hasMore && (
-                <div style={{ padding: '8px 12px 24px', textAlign: 'center' }}>
-                  <button onClick={function() { fetchGames(filters, page + 1); }} disabled={gamesLoading}
-                    style={{ width: '100%', padding: '12px', borderRadius: 12, border: '0.5px solid #6366f155', background: '#6366f122', color: '#a5b4fc', cursor: gamesLoading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                    {gamesLoading ? <><i className="ti ti-loader" style={{ fontSize: 13, animation: 'spin 1s linear infinite' }} />Loading…</> : 'Load more games'}
-                  </button>
-                </div>
-              )}
-            </>
+            <div className="mob-game-grid">
+              {games.map(function(game) {
+                return (
+                  <MobileGameCard key={game.steamId} game={game}
+                    isAdded={isTracked(game.steamId)}
+                    isAdding={addingId === game.steamId}
+                    onAdd={handleAdd} onRemove={handleRemove} />
+                );
+              })}
+            </div>
           )}
         </div>
 
-        {/* Filter bottom sheet */}
         {mobileFilterSheet && (
           <MobileFilterSheet
             filters={filters}
@@ -872,14 +761,14 @@ export default function App() {
             onReset={function() { resetFilters(); setMobileFilterSheet(false); }}
             onClose={function() { setMobileFilterSheet(false); }}
             resultCount={totalCount}
-            loading={gamesLoading && page === 1}
-            gameCount={games.length}
+            loading={gamesLoading}
           />
         )}
       </div>
     );
   }
 
+  // ── Desktop layout ────────────────────────────────────────
   return (
     <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', flexDirection: 'column' }}>
       <style>{`
@@ -890,18 +779,16 @@ export default function App() {
         .scroll-thin::-webkit-scrollbar-thumb{background:#2a2b36;border-radius:99px;}
       `}</style>
 
-      {/* Header */}
       <header style={{ background: '#111116', borderBottom: '0.5px solid #2a2b36', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Logo42p size={34} />
           <div>
             <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#f5f3ff', letterSpacing: '-0.02em' }}>42p Games</p>
-            <p style={{ margin: 0, fontSize: 10, color: '#6b6b7a' }}>Powered by RAWG.io</p>
+            <p style={{ margin: 0, fontSize: 10, color: '#6b6b7a' }}>Powered by Steam</p>
           </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Server switcher */}
           <button onClick={loadGuilds}
             style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 9, border: '0.5px solid #2a2b36', background: 'transparent', cursor: 'pointer', color: '#8b8ca8', fontSize: 12 }}>
             {currentGuild && currentGuild.iconUrl
@@ -924,20 +811,15 @@ export default function App() {
         </div>
       </header>
 
-      {/* Body */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-
-        {/* Filter panel */}
         <FilterPanel
           filters={filters}
           onChange={updateFilters}
           onReset={resetFilters}
           resultCount={totalCount}
-          loading={gamesLoading && page === 1}
-          gameCount={games.length}
+          loading={gamesLoading}
         />
 
-        {/* Main content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }} className="scroll-thin">
 
           {/* Search bar */}
@@ -946,7 +828,7 @@ export default function App() {
             <input
               value={filters.search}
               onChange={function(e) { updateFilters({ search: e.target.value }); }}
-              placeholder="Search all games on RAWG…"
+              placeholder="Search Steam…"
               style={{ width: '100%', boxSizing: 'border-box', background: '#1a1b22', border: '0.5px solid #3a3a42', borderRadius: 12, color: '#e8e9f3', padding: '12px 14px 12px 42px', fontSize: 14, outline: 'none' }}
             />
             {filters.search && (
@@ -959,59 +841,44 @@ export default function App() {
           {activeFilterCount > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 12, color: '#6b6b7a' }}>Active filters:</span>
-              {filters.genres.map(function(id) {
-                var g = GENRES.find(function(x) { return x.id === id; });
-                return g ? <span key={id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#6366f133', color: '#a5b4fc', border: '0.5px solid #6366f155' }}>{g.name}</span> : null;
-              })}
-              {filters.tags.map(function(id) {
-                var t = TAGS.find(function(x) { return x.id === id; });
-                return t ? <span key={id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#7c3aed33', color: '#c4b5fd', border: '0.5px solid #7c3aed55' }}>{t.name}</span> : null;
-              })}
+              {filters.type !== 'all' && (
+                <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#6366f133', color: '#a5b4fc', border: '0.5px solid #6366f155' }}>
+                  {TYPE_OPTIONS.find(function(o) { return o.value === filters.type; })?.label}
+                </span>
+              )}
               {filters.platforms.map(function(id) {
-                var p = PLATFORMS.find(function(x) { return x.id === id; });
+                var p = PLATFORM_OPTIONS.find(function(x) { return x.id === id; });
                 return p ? <span key={id} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#0e7490', color: '#a5f3fc', border: '0.5px solid #06b6d455' }}>{p.name}</span> : null;
               })}
-              {filters.dates && <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: '#16a34a22', color: '#86efac', border: '0.5px solid #16a34a55' }}>{DATE_PRESETS.find(function(p) { return p.value === filters.dates; })?.label || 'Custom dates'}</span>}
               <button onClick={resetFilters} style={{ fontSize: 11, color: '#f87171', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginLeft: 4 }}>Clear all</button>
             </div>
           )}
 
           {/* Games grid */}
-          {gamesLoading && page === 1 ? (
+          {gamesLoading ? (
             <div style={{ textAlign: 'center', padding: '60px 0' }}>
               <i className="ti ti-loader" style={{ fontSize: 32, animation: 'spin 1s linear infinite', color: '#6366f1' }} />
             </div>
           ) : games.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b6b7a' }}>
               <p style={{ fontSize: 40, margin: '0 0 12px' }}>🎮</p>
-              <p style={{ fontSize: 16, color: '#8b8ca8', margin: '0 0 6px' }}>No games found</p>
-              <p style={{ fontSize: 13 }}>Try adjusting the filters or search for a different game.</p>
+              <p style={{ fontSize: 16, color: '#8b8ca8', margin: '0 0 6px' }}>
+                {filters.search ? 'No results for "' + filters.search + '"' : 'No games found'}
+              </p>
+              <p style={{ fontSize: 13 }}>{filters.search ? 'Try a different search term.' : 'Try adjusting the filters.'}</p>
               {activeFilterCount > 0 && <button onClick={resetFilters} style={{ marginTop: 12, padding: '8px 18px', borderRadius: 9, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Reset filters</button>}
             </div>
           ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 14 }}>
-                {games.map(function(game) {
-                  return (
-                    <GameCard key={game.rawgId} game={game}
-                      isAdded={isTracked(game.rawgId)}
-                      isAdding={addingId === game.rawgId}
-                      onAdd={handleAdd} onRemove={handleRemove} />
-                  );
-                })}
-              </div>
-
-              {hasMore && (
-                <div style={{ textAlign: 'center', marginTop: 28 }}>
-                  <button
-                    onClick={function() { fetchGames(filters, page + 1); }}
-                    disabled={gamesLoading}
-                    style={{ padding: '10px 28px', borderRadius: 10, border: '0.5px solid #6366f155', background: '#6366f122', color: '#a5b4fc', cursor: gamesLoading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    {gamesLoading ? <><i className="ti ti-loader" style={{ fontSize: 14, animation: 'spin 1s linear infinite' }} />Loading…</> : 'Load more games'}
-                  </button>
-                </div>
-              )}
-            </>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 14 }}>
+              {games.map(function(game) {
+                return (
+                  <GameCard key={game.steamId} game={game}
+                    isAdded={isTracked(game.steamId)}
+                    isAdding={addingId === game.steamId}
+                    onAdd={handleAdd} onRemove={handleRemove} />
+                );
+              })}
+            </div>
           )}
         </div>
       </div>
