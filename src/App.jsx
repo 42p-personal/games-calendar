@@ -4,6 +4,7 @@ const API_URL      = import.meta.env.VITE_API_URL ?? '';
 const GUILD_KEY    = 'dc_guild';
 const FILTERS_KEY  = 'dc_game_filters';
 const CALENDAR_URL = 'https://calendar.42p.uk';
+const VOTES_URL    = 'https://votes.42p.uk';
 const TODAY        = new Date();
 
 // ─── Toast ────────────────────────────────────────────────────
@@ -266,7 +267,7 @@ function GuildPicker({ guilds, loading, error, onSelect }) {
 }
 
 // ─── Game card ────────────────────────────────────────────────
-function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
+function GameCard({ game, isAdded, isAdding, onAdd, onRemove, isVoted, isVoting, onVote }) {
   var releaseDate  = game.releaseDate ? new Date(game.releaseDate) : null;
   var daysUntil    = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
   var [hoverRemove, setHoverRemove] = useState(false);
@@ -323,7 +324,7 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
       </div>
 
       {/* Action */}
-      <div style={{ padding: '0 14px 12px' }}>
+      <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {isAdded ? (
           <button onClick={function() { onRemove(game); }}
             onMouseEnter={function() { setHoverRemove(true); }}
@@ -339,6 +340,14 @@ function GameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
               : <><i className="ti ti-calendar-plus" style={{ fontSize: 12 }} />Add to calendar</>}
           </button>
         )}
+        <button onClick={function() { onVote(game); }} disabled={isVoting}
+          style={{ width: '100%', padding: '6px', borderRadius: 8, border: isVoted ? '0.5px solid #a855f755' : '0.5px solid #2a2b36', background: isVoted ? '#a855f715' : 'transparent', color: isVoted ? '#c084fc' : '#52536a', cursor: isVoting ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, transition: 'all 0.15s' }}>
+          {isVoting
+            ? <><i className="ti ti-loader" style={{ fontSize: 11, animation: 'spin 1s linear infinite' }} />Nominating…</>
+            : isVoted
+              ? <><i className="ti ti-check" style={{ fontSize: 11 }} />In vote</>
+              : <><i className="ti ti-chart-bar" style={{ fontSize: 11 }} />Add to vote</>}
+        </button>
       </div>
     </div>
   );
@@ -384,7 +393,7 @@ function MobileFilterSheet({ filters, onChange, onReset, onClose, resultCount, l
 }
 
 // ─── Mobile game card ─────────────────────────────────────────
-function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
+function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove, isVoted, isVoting, onVote }) {
   var releaseDate = game.releaseDate ? new Date(game.releaseDate) : null;
   var daysUntil   = releaseDate ? Math.ceil((releaseDate - TODAY) / (1000 * 60 * 60 * 24)) : null;
   var [hoverRemove, setHoverRemove] = useState(false);
@@ -418,7 +427,7 @@ function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
         </p>
         {game.price && <p style={{ margin: '2px 0 0', fontSize: 10, color: '#6b6b7a' }}>{game.price}</p>}
       </div>
-      <div style={{ padding: '6px 10px 10px' }}>
+      <div style={{ padding: '6px 10px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
         {isAdded ? (
           <button onClick={function() { onRemove(game); }}
             onMouseEnter={function() { setHoverRemove(true); }}
@@ -432,6 +441,10 @@ function MobileGameCard({ game, isAdded, isAdding, onAdd, onRemove }) {
             {isAdding ? '…' : '＋ Add to calendar'}
           </button>
         )}
+        <button onClick={function() { onVote(game); }} disabled={isVoting}
+          style={{ width: '100%', padding: '5px', borderRadius: 8, border: isVoted ? '0.5px solid #a855f755' : '0.5px solid #2a2b36', background: isVoted ? '#a855f715' : 'transparent', color: isVoted ? '#c084fc' : '#52536a', cursor: isVoting ? 'not-allowed' : 'pointer', fontSize: 10, fontWeight: 600, transition: 'all 0.15s' }}>
+          {isVoting ? '…' : isVoted ? '🗳 In vote' : '🗳 Add to vote'}
+        </button>
       </div>
     </div>
   );
@@ -467,6 +480,9 @@ export default function App() {
     } catch (e) { /* fall through */ }
     return DEFAULT_FILTERS;
   });
+
+  var [nominatedIds,  setNominatedIds]  = useState(new Set());
+  var [nominatingVoteId, setNominatingVoteId] = useState(null);
 
   var [toast,             setToast]             = useState(null);
   var [mobileFilterSheet, setMobileFilterSheet] = useState(false);
@@ -534,6 +550,11 @@ export default function App() {
     setGamesLoading(true);
     try { setTrackedGames(await apiFetch('GET', '/api/games', null, guild.id)); }
     catch (err) { console.error('Failed to load tracked games:', err.message); }
+    // Load vote nominations to show which games are already nominated
+    try {
+      var noms = await apiFetch('GET', '/api/votes/nominations', null, guild.id);
+      setNominatedIds(new Set(noms.map(function(n) { return n.steamId; }).filter(Boolean)));
+    } catch (e) { /* non-fatal */ }
     await fetchGames(filters, guild.id);
     setGamesLoading(false);
   }
@@ -630,6 +651,28 @@ export default function App() {
 
   function isTracked(steamId) { return trackedGames.some(function(g) { return g.steamId === steamId; }); }
 
+  async function handleAddToVote(game) {
+    setNominatingVoteId(game.steamId);
+    try {
+      await apiFetch('POST', '/api/votes/nominations', {
+        steamId:  game.steamId,
+        name:     game.name,
+        coverUrl: game.coverUrl,
+        steamUrl: game.steamUrl,
+        platforms: game.platforms,
+      }, currentGuild.id);
+      setNominatedIds(function(prev) { var s = new Set(prev); s.add(game.steamId); return s; });
+      setToast(game.name + ' added to vote!');
+    } catch (err) {
+      if (err.message === 'This game is already nominated.') {
+        setNominatedIds(function(prev) { var s = new Set(prev); s.add(game.steamId); return s; });
+        setToast(game.name + ' is already nominated');
+      } else {
+        alert(err.message);
+      }
+    } finally { setNominatingVoteId(null); }
+  }
+
   // ── Screen guards ─────────────────────────────────────────
   if (screen === 'loading') return (
     <div style={{ minHeight: '100vh', background: '#0f1015', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#8b8ca8' }}>
@@ -699,7 +742,9 @@ export default function App() {
               {games.map(function(game) {
                 return <MobileGameCard key={game.steamId} game={game}
                   isAdded={isTracked(game.steamId)} isAdding={addingId === game.steamId}
-                  onAdd={handleAdd} onRemove={handleRemove} />;
+                  onAdd={handleAdd} onRemove={handleRemove}
+                  isVoted={nominatedIds.has(game.steamId)} isVoting={nominatingVoteId === game.steamId}
+                  onVote={handleAddToVote} />;
               })}
             </div>
           )}
@@ -747,6 +792,9 @@ export default function App() {
           </button>
           <a href={CALENDAR_URL} style={{ padding: '7px 14px', borderRadius: 9, border: '0.5px solid #2a2b36', background: 'transparent', color: '#8b8ca8', fontSize: 12, fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
             <i className="ti ti-calendar-event" style={{ fontSize: 14 }} />Calendar
+          </a>
+          <a href={VOTES_URL} style={{ padding: '7px 14px', borderRadius: 9, border: '0.5px solid #2a2b36', background: 'transparent', color: '#8b8ca8', fontSize: 12, fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-chart-bar" style={{ fontSize: 14 }} />Votes
           </a>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 9, background: '#6366f115', border: '0.5px solid #6366f133' }}>
             <div style={{ width: 22, height: 22, borderRadius: '50%', background: '#6366f1', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700 }}>
@@ -799,7 +847,9 @@ export default function App() {
               {games.map(function(game) {
                 return <GameCard key={game.steamId} game={game}
                   isAdded={isTracked(game.steamId)} isAdding={addingId === game.steamId}
-                  onAdd={handleAdd} onRemove={handleRemove} />;
+                  onAdd={handleAdd} onRemove={handleRemove}
+                  isVoted={nominatedIds.has(game.steamId)} isVoting={nominatingVoteId === game.steamId}
+                  onVote={handleAddToVote} />;
               })}
             </div>
           )}
